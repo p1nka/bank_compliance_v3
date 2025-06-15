@@ -11,9 +11,9 @@ from enum import Enum
 import secrets
 import aiohttp
 import aiofiles
-from email.mime.text import MimeText
-from email.mime.multipart import MimeMultipart
-from email.mime.base import MimeBase
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
 from email import encoders
 import jinja2
 from pathlib import Path
@@ -282,19 +282,19 @@ class EmailClient:
 
         try:
             # Create message
-            msg = MimeMultipart('alternative')
+            msg = MIMEMultipart('alternative')
             msg['Subject'] = message_data.get("subject")
             msg['From'] = self.from_email
             msg['To'] = ", ".join(message_data.get("recipients", []))
 
             # Add text content
             if message_data.get("text_content"):
-                text_part = MimeText(message_data["text_content"], 'plain')
+                text_part = MIMEText(message_data["text_content"], 'plain')
                 msg.attach(text_part)
 
             # Add HTML content
             if message_data.get("html_content"):
-                html_part = MimeText(message_data["html_content"], 'html')
+                html_part = MIMEText(message_data["html_content"], 'html')
                 msg.attach(html_part)
 
             # Add attachments
@@ -324,7 +324,7 @@ class EmailClient:
                 "delivery_method": "email"
             }
 
-    async def _add_attachment(self, msg: MimeMultipart, attachment: Dict):
+    async def _add_attachment(self, msg: MIMEMultipart, attachment: Dict):
         """Add attachment to email message"""
 
         try:
@@ -335,7 +335,7 @@ class EmailClient:
                 async with aiofiles.open(file_path, "rb") as f:
                     file_data = await f.read()
 
-                part = MimeBase('application', 'octet-stream')
+                part = MIMEBase('application', 'octet-stream')
                 part.set_payload(file_data)
                 encoders.encode_base64(part)
                 part.add_header(

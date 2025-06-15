@@ -102,7 +102,7 @@ class MemoryEntry:
     # Content
     data: Dict
     content_hash: str
-    encrypted: bool = False
+    encrypted: bool
 
     # Metadata
     created_at: datetime
@@ -206,8 +206,6 @@ class VectorMemoryStore:
                     with open(mapping_path, 'r') as f:
                         mappings = json.load(f)
                         self.id_mapping = {int(k): v for k, v in mapping.get("id_mapping", {}).items()}
-                        s
-
                         self.reverse_mapping = mappings.get("reverse_mapping", {})
                         self.next_id = mappings.get("next_id", 0)
 
@@ -558,9 +556,9 @@ class HybridMemoryAgent:
         if self.config.get("redis_enabled", False):
             try:
                 self.redis_client = redis.Redis(
-                    host=self.config.get("redis_host", "localhost"),
+                    host=self.config.get("redis_host", "redis-18181.c53.west-us.azure.redns.redis-cloud.com:18181"),
                     port=self.config.get("redis_port", 6379),
-                    db=self.config.get("redis_db", 0),
+                    db=self.config.get("redis_db", "database456"),
                     decode_responses=True
                 )
             except Exception as e:

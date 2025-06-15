@@ -29,7 +29,7 @@ from langsmith.wrappers import wrap_openai
 
 # MCP imports
 from mcp_client import MCPClient
-from mcp_tools import BankingComplianceMCPServer
+from mcp_implementation import MCPServer
 
 # Pydantic for data validation
 from pydantic import BaseModel, validator, Field
@@ -112,11 +112,11 @@ class DataProcessingState:
 class AccountSchema(BaseModel):
     """Pydantic model for account data validation"""
     Account_ID: str = Field(..., min_length=1, max_length=50)
-    Account_Type: str = Field(..., regex=r'^(Current|Saving|Call|Fixed|Term|Investment|safe_deposit_box).*')
+    Account_Type: str = Field(..., pattern=r'^(Current|Saving|Call|Fixed|Term|Investment|safe_deposit_box).*')
     Current_Balance: Optional[float] = Field(None, ge=0)
     Date_Last_Cust_Initiated_Activity: Optional[str] = None
     Date_Last_Customer_Communication_Any_Type: Optional[str] = None
-    Customer_Has_Active_Liability_Account: Optional[str] = Field(None, regex=r'^(yes|no|true|false|1|0)$')
+    Customer_Has_Active_Liability_Account: Optional[str] = Field(None, pattern=r'^(yes|no|true|false|1|0)$')
 
     @validator('Current_Balance')
     def validate_balance(cls, v):
@@ -128,7 +128,7 @@ class AccountSchema(BaseModel):
 class PaymentInstrumentSchema(BaseModel):
     """Schema for payment instruments (cheques, drafts, etc.)"""
     Account_ID: str = Field(..., min_length=1)
-    Account_Type: str = Field(..., regex=r'.*(Bankers_Cheque|Bank_Draft|Cashier_Order).*')
+    Account_Type: str = Field(..., pattern=r'.*(Bankers_Cheque|Bank_Draft|Cashier_Order).*')
     Unclaimed_Item_Trigger_Date: Optional[str] = None
     Unclaimed_Item_Amount: Optional[float] = Field(None, gt=0)
 
