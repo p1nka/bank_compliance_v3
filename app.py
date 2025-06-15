@@ -1457,7 +1457,7 @@ def generate_mitigation_plan(strategies):
     high_priority = [s for s in strategies if s['priority'] == 'High']
     medium_priority = [s for s in strategies if s['priority'] == 'Medium']
     
-            if high_priority:
+  if high_priority:
         st.markdown("#### 🚨 Phase 1: Immediate Actions (0-30 days)")
         for i, strategy in enumerate(high_priority, 1):
             st.markdown(f"**{i}. {strategy['strategy']}**")
