@@ -1,0 +1,39 @@
+2025-06-15 16:10:42,241 - __main__ - INFO - CBUAE Intelligent Banking Compliance System initialized
+2025-06-15 16:10:42,248 - __main__ - ERROR - Application error: st.session_state has no attribute "intelligent_agent_manager". Did you forget to initialize it? More info: https://docs.streamlit.io/develop/concepts/architecture/session-state#initialization
+Traceback (most recent call last):
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python310\lib\site-packages\streamlit\runtime\state\session_state.py", line 454, in __getitem__
+    return self._getitem(widget_id, key)
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python310\lib\site-packages\streamlit\runtime\state\session_state.py", line 499, in _getitem
+    raise KeyError
+KeyError
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python310\lib\site-packages\streamlit\runtime\state\session_state_proxy.py", line 130, in __getattr__
+    return self[key]
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python310\lib\site-packages\streamlit\runtime\state\session_state_proxy.py", line 101, in __getitem__
+    return get_session_state()[key]
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python310\lib\site-packages\streamlit\runtime\state\safe_session_state.py", line 96, in __getitem__
+    return self._state[key]
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python310\lib\site-packages\streamlit\runtime\state\session_state.py", line 456, in __getitem__
+    raise KeyError(_missing_key_error_message(key))
+KeyError: 'st.session_state has no key "intelligent_agent_manager". Did you forget to initialize it? More info: https://docs.streamlit.io/develop/concepts/architecture/session-state#initialization'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\Admin\PycharmProjects\Banking_Compliance_V3\app.py", line 2745, in <module>
+    initialize_intelligent_agent_manager()
+  File "C:\Users\Admin\PycharmProjects\Banking_Compliance_V3\app.py", line 2641, in initialize_intelligent_agent_manager
+    if st.session_state.intelligent_agent_manager is None:
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python310\lib\site-packages\streamlit\runtime\state\session_state_proxy.py", line 132, in __getattr__
+    raise AttributeError(_missing_attr_error_message(key))
+AttributeError: st.session_state has no attribute "intelligent_agent_manager". Did you forget to initialize it? More info: https://docs.streamlit.io/develop/concepts/architecture/session-state#initialization
+2025-06-15 18:20:58,053 - __main__ - ERROR - Analysis function failed: Cannot set a DataFrame with multiple columns to the single column is_high_value
+2025-06-15 18:20:58,061 - __main__ - ERROR - Analysis function failed: 'contact_attempts_made'
+2025-06-15 18:20:58,065 - __main__ - ERROR - Analysis function failed: 'transferred_to_cb_date'
+2025-06-15 18:20:58,068 - __main__ - ERROR - Analysis function failed: 'balance_current'
+2025-06-15 18:22:53,703 - __main__ - ERROR - Analysis function failed: '>' not supported between instances of 'str' and 'int'
+2025-06-15 18:22:53,706 - __main__ - ERROR - Analysis function failed: '>' not supported between instances of 'str' and 'int'
+2025-06-15 18:22:53,709 - __main__ - ERROR - Analysis function failed: '>' not supported between instances of 'str' and 'int'

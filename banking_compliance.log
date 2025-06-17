@@ -1,0 +1,24 @@
+2025-05-30 22:16:47,147 - __main__ - ERROR - System error
+Traceback (most recent call last):
+  File "C:\Users\Admin\PycharmProjects\Banking_Compliance_V3\app.py", line 1155, in <module>
+    asyncio.run(main())
+    ~~~~~~~~~~~^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\asyncio\runners.py", line 195, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\asyncio\base_events.py", line 719, in run_until_complete
+    return future.result()
+           ~~~~~~~~~~~~~^^
+  File "C:\Users\Admin\PycharmProjects\Banking_Compliance_V3\app.py", line 1150, in main
+    await demonstrate_system()
+  File "C:\Users\Admin\PycharmProjects\Banking_Compliance_V3\app.py", line 988, in demonstrate_system
+    system = BankingComplianceSystem()
+  File "C:\Users\Admin\PycharmProjects\Banking_Compliance_V3\app.py", line 271, in __init__
+    signal.signal(signal.SIGINT, self._signal_handler)
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\signal.py", line 58, in signal
+    handler = _signal.signal(_enum_to_int(signalnum), _enum_to_int(handler))
+ValueError: signal only works in main thread of the main interpreter

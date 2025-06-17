@@ -1,45 +1,89 @@
 """
-compliance_agent.py - CBUAE Compliance Analyzer Agents System
-17 Specialized Agents for Processing Dormant Accounts and Taking Regulatory Actions
-
-Based on the Banking Compliance AI Agents Classification Table:
-- Contact & Communication (2 agents)
-- Process Management (3 agents) 
-- Specialized Compliance (4 agents)
-- Reporting & Retention (2 agents)
-- Utility (5 agents)
-- Master Orchestrator (1 agent)
+agents/compliance_verification_agent.py - CBUAE Compliance Verification Agent
+Aligned with dormancy_agents.py structure and CSV column names
+Comprehensive compliance verification for banking dormancy regulations
 """
 
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
-from typing import Dict, List, Any, Optional, Tuple
 import logging
-from dataclasses import dataclass
+import pandas as pd
+import asyncio
+from datetime import datetime, timedelta
+from typing import Dict, List, Any, Optional, Tuple, Union
+from dataclasses import dataclass, asdict
 from enum import Enum
+import secrets
 import json
+import numpy as np
+
+# LangGraph and LangSmith imports
+from langgraph.graph import StateGraph, END, START
+from langgraph.checkpoint.memory import MemorySaver
+from langsmith import traceable, Client as LangSmithClient
+
+# MCP imports with fallback
+try:
+    from mcp_client import MCPClient
+except ImportError:
+    logging.warning("MCPClient not available, using mock implementation")
+
+    class MCPClient:
+        async def call_tool(self, tool_name: str, params: Dict) -> Dict:
+            return {"success": True, "data": {}}
+
+# Import error handler and memory agent
+try:
+    from agents.error_handler_agent import ErrorHandlerAgent, ErrorState
+    from agents.memory_agent import MemoryBucket, MemoryPriority, MemoryContext
+except ImportError:
+    # Mock implementations
+    class ErrorState:
+        def __init__(self, **kwargs):
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+
+    class ErrorHandlerAgent:
+        def __init__(self, memory_agent, mcp_client):
+            pass
+
+        async def handle_workflow_error(self, error_state):
+            return type('obj', (object,), {
+                'recovery_action': 'continue',
+                'recovery_success': True
+            })()
+
+    class MemoryBucket:
+        KNOWLEDGE = "knowledge"
+        SESSION = "session"
+        AUDIT = "audit"
+
+    class MemoryPriority:
+        HIGH = "high"
+        CRITICAL = "critical"
+
+    class MemoryContext:
+        pass
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
-
-# Enums for agent states and priorities
+# Enums for compliance verification
 class ComplianceStatus(Enum):
     COMPLIANT = "compliant"
     NON_COMPLIANT = "non_compliant"
     ACTION_REQUIRED = "action_required"
     UNDER_REVIEW = "under_review"
     ESCALATED = "escalated"
-
+    PENDING = "pending"
 
 class ActionPriority(Enum):
     CRITICAL = "CRITICAL"
     HIGH = "HIGH"
     MEDIUM = "MEDIUM"
     LOW = "LOW"
-
 
 class ComplianceCategory(Enum):
     CONTACT_COMMUNICATION = "Contact & Communication"
@@ -48,11 +92,32 @@ class ComplianceCategory(Enum):
     REPORTING_RETENTION = "Reporting & Retention"
     UTILITY = "Utility"
 
+class CBUAEArticle(Enum):
+    """CBUAE regulation articles"""
+    ARTICLE_2_1_1 = "Art. 2.1.1"  # Demand Deposit Dormancy
+    ARTICLE_2_2 = "Art. 2.2"      # Fixed Deposit Dormancy
+    ARTICLE_2_3 = "Art. 2.3"      # Investment Account Dormancy
+    ARTICLE_2_4 = "Art. 2.4"      # Unclaimed Payment Instruments
+    ARTICLE_2_6 = "Art. 2.6"      # Safe Deposit Box Dormancy
+    ARTICLE_3_1 = "Art. 3.1"      # Contact Attempt Requirements
+    ARTICLE_3_4 = "Art. 3.4"      # Internal Ledger Transfer
+    ARTICLE_3_5 = "Art. 3.5"      # Ledger Maintenance
+    ARTICLE_3_6 = "Art. 3.6"      # Unclaimed Instruments Ledger
+    ARTICLE_3_7 = "Art. 3.7"      # Safe Deposit Box Court Application
+    ARTICLE_3_9 = "Art. 3.9"      # Record Retention
+    ARTICLE_3_10 = "Art. 3.10"    # Annual Reporting
+    ARTICLE_4 = "Art. 4"          # Customer Claims
+    ARTICLE_5 = "Art. 5"          # Proactive Communication
+    ARTICLE_7_3 = "Art. 7.3"      # Statement Suppression
+    ARTICLE_8 = "Art. 8"          # Central Bank Transfer
+    ARTICLE_8_1 = "Art. 8.1"      # Transfer Eligibility
+    ARTICLE_8_5 = "Art. 8.5"      # Foreign Currency Conversion
 
 @dataclass
 class ComplianceAction:
-    """Data class for compliance actions"""
+    """Data structure for compliance actions"""
     account_id: str
+    customer_id: str
     action_type: str
     priority: ActionPriority
     deadline: datetime
@@ -61,15 +126,21 @@ class ComplianceAction:
     assigned_agent: str
     status: ComplianceStatus = ComplianceStatus.ACTION_REQUIRED
     created_date: datetime = None
+    estimated_effort_hours: float = 1.0
+    dependencies: List[str] = None
+    validation_criteria: List[str] = None
 
     def __post_init__(self):
         if self.created_date is None:
             self.created_date = datetime.now()
-
+        if self.dependencies is None:
+            self.dependencies = []
+        if self.validation_criteria is None:
+            self.validation_criteria = []
 
 @dataclass
 class ComplianceResult:
-    """Data class for compliance analysis results"""
+    """Data structure for compliance analysis results"""
     agent_name: str
     category: ComplianceCategory
     cbuae_article: str
@@ -78,65 +149,225 @@ class ComplianceResult:
     actions_generated: List[ComplianceAction]
     processing_time: float
     success: bool
+    compliance_rate: float = 0.0
+    risk_level: str = "LOW"
     error_message: Optional[str] = None
+    recommendations: List[str] = None
 
+    def __post_init__(self):
+        if self.recommendations is None:
+            self.recommendations = []
 
-class ComplianceAgentBase:
-    """Base class for all compliance agents"""
+        # Calculate compliance rate
+        if self.accounts_processed > 0:
+            self.compliance_rate = ((self.accounts_processed - self.violations_found) / self.accounts_processed) * 100
 
-    def __init__(self, agent_name: str, category: ComplianceCategory, cbuae_article: str):
+        # Determine risk level
+        if self.violations_found == 0:
+            self.risk_level = "LOW"
+        elif self.violations_found <= self.accounts_processed * 0.1:
+            self.risk_level = "MEDIUM"
+        else:
+            self.risk_level = "HIGH"
+
+@dataclass
+class ComplianceState:
+    """State for compliance verification workflow"""
+    session_id: str
+    user_id: str
+    verification_id: str
+    timestamp: datetime
+
+    # Input data
+    processed_data: Optional[Dict] = None
+    verification_config: Dict = None
+
+    # Verification results
+    compliance_results: Optional[Dict] = None
+    compliance_summary: Optional[Dict] = None
+    action_plan: Optional[Dict] = None
+
+    # Status tracking
+    verification_status: ComplianceStatus = ComplianceStatus.PENDING
+    total_accounts_verified: int = 0
+    total_violations_found: int = 0
+    total_actions_generated: int = 0
+
+    # Performance metrics
+    processing_time: float = 0.0
+    verification_efficiency: float = 0.0
+
+    # Audit trail
+    verification_log: List[Dict] = None
+    error_log: List[Dict] = None
+
+    # Agent orchestration
+    active_agents: List[str] = None
+    completed_agents: List[str] = None
+    failed_agents: List[str] = None
+    agent_results: Dict = None
+
+    def __post_init__(self):
+        if self.verification_config is None:
+            self.verification_config = {}
+        if self.verification_log is None:
+            self.verification_log = []
+        if self.error_log is None:
+            self.error_log = []
+        if self.active_agents is None:
+            self.active_agents = []
+        if self.completed_agents is None:
+            self.completed_agents = []
+        if self.failed_agents is None:
+            self.failed_agents = []
+        if self.agent_results is None:
+            self.agent_results = {}
+
+# Mock Memory Agent
+class MockMemoryAgent:
+    """Mock memory agent for testing purposes"""
+
+    async def create_memory_context(self, user_id: str, session_id: str, agent_name: str):
+        return {"user_id": user_id, "session_id": session_id, "agent_name": agent_name}
+
+    async def retrieve_memory(self, bucket: str, filter_criteria: Dict, context: Dict):
+        return {"success": True, "data": []}
+
+    async def store_memory(self, bucket: str, data: Dict, context: Dict,
+                           content_type: str = None, priority: str = None,
+                           tags: List[str] = None, encrypt_sensitive: bool = False):
+        return {"success": True, "id": secrets.token_hex(8)}
+
+# Base Compliance Agent Class
+class BaseComplianceAgent:
+    """Base class for all compliance verification agents"""
+
+    def __init__(self, agent_name: str, category: ComplianceCategory, cbuae_article: str,
+                 memory_agent=None, mcp_client: MCPClient = None):
         self.agent_name = agent_name
         self.category = category
         self.cbuae_article = cbuae_article
-        self.logger = logging.getLogger(f"ComplianceAgent.{agent_name}")
+        self.memory_agent = memory_agent or MockMemoryAgent()
+        self.mcp_client = mcp_client or MCPClient()
 
-    def analyze(self, dormant_accounts: pd.DataFrame) -> ComplianceResult:
-        """Base analyze method to be implemented by each agent"""
-        raise NotImplementedError("Each agent must implement the analyze method")
+        # Initialize error handler
+        self.error_handler = ErrorHandlerAgent(memory_agent, mcp_client)
+
+        try:
+            self.langsmith_client = LangSmithClient()
+        except:
+            self.langsmith_client = None
+
+        # CSV column mappings (same as dormancy agents)
+        self.csv_columns = {
+            'customer_id': 'customer_id',
+            'account_id': 'account_id',
+            'account_type': 'account_type',
+            'account_status': 'account_status',
+            'balance_current': 'balance_current',
+            'last_transaction_date': 'last_transaction_date',
+            'dormancy_status': 'dormancy_status',
+            'dormancy_period_months': 'dormancy_period_months',
+            'contact_attempts_made': 'contact_attempts_made',
+            'last_contact_date': 'last_contact_date',
+            'last_contact_attempt_date': 'last_contact_attempt_date',
+            'current_stage': 'current_stage',
+            'waiting_period_end': 'waiting_period_end',
+            'transferred_to_ledger_date': 'transferred_to_ledger_date',
+            'transferred_to_cb_date': 'transferred_to_cb_date',
+            'transfer_eligibility_date': 'transfer_eligibility_date',
+            'statement_frequency': 'statement_frequency',
+            'currency': 'currency',
+            'address_known': 'address_known',
+            'maturity_date': 'maturity_date',
+            'auto_renewal': 'auto_renewal'
+        }
+
+    def _safe_date_parse(self, date_str: str) -> Optional[datetime]:
+        """Safely parse date strings from CSV"""
+        if pd.isna(date_str) or date_str == '' or date_str is None:
+            return None
+
+        try:
+            if isinstance(date_str, str):
+                for fmt in ['%Y-%m-%d', '%d/%m/%Y', '%Y-%m-%d %H:%M:%S']:
+                    try:
+                        return datetime.strptime(date_str, fmt)
+                    except ValueError:
+                        continue
+                return pd.to_datetime(date_str)
+            elif isinstance(date_str, datetime):
+                return date_str
+            else:
+                return pd.to_datetime(date_str)
+        except Exception as e:
+            logger.warning(f"Could not parse date '{date_str}': {e}")
+            return None
+
+    def _calculate_months_since(self, date_str: str, reference_date: datetime = None) -> float:
+        """Calculate months since a given date"""
+        if not reference_date:
+            reference_date = datetime.now()
+
+        parsed_date = self._safe_date_parse(date_str)
+        if not parsed_date:
+            return 0.0
+
+        delta = reference_date - parsed_date
+        return delta.days / 30.44  # Average days per month
 
     def generate_action(self, account_row: pd.Series, action_type: str,
-                        priority: ActionPriority, days_to_deadline: int,
-                        description: str) -> ComplianceAction:
+                       priority: ActionPriority, days_to_deadline: int,
+                       description: str, estimated_hours: float = 1.0) -> ComplianceAction:
         """Generate a compliance action for an account"""
         deadline = datetime.now() + timedelta(days=days_to_deadline)
 
         return ComplianceAction(
-            account_id=account_row['account_id'],
+            account_id=account_row[self.csv_columns['account_id']],
+            customer_id=account_row[self.csv_columns['customer_id']],
             action_type=action_type,
             priority=priority,
             deadline=deadline,
             description=description,
             cbuae_article=self.cbuae_article,
-            assigned_agent=self.agent_name
+            assigned_agent=self.agent_name,
+            estimated_effort_hours=estimated_hours
         )
 
+    async def analyze_compliance(self, accounts_df: pd.DataFrame) -> ComplianceResult:
+        """Base analyze compliance method - to be implemented by subclasses"""
+        raise NotImplementedError("Subclasses must implement analyze_compliance")
 
-# ===== CONTACT & COMMUNICATION AGENTS (2) =====
+# ===== CONTACT & COMMUNICATION AGENTS =====
 
-class DetectIncompleteContactAttemptsAgent(ComplianceAgentBase):
+class DetectIncompleteContactAttemptsAgent(BaseComplianceAgent):
     """Contact & Communication - Art. 3.1, 5: Insufficient contact detection"""
 
-    def __init__(self):
+    def __init__(self, memory_agent=None, mcp_client: MCPClient = None):
         super().__init__(
             agent_name="detect_incomplete_contact_attempts",
             category=ComplianceCategory.CONTACT_COMMUNICATION,
-            cbuae_article="Art. 3.1, 5"
+            cbuae_article=CBUAEArticle.ARTICLE_3_1.value,
+            memory_agent=memory_agent,
+            mcp_client=mcp_client
         )
 
-    def analyze(self, dormant_accounts: pd.DataFrame) -> ComplianceResult:
+    @traceable(name="contact_attempts_compliance")
+    async def analyze_compliance(self, accounts_df: pd.DataFrame) -> ComplianceResult:
+        """Analyze contact attempt compliance using CSV columns"""
         start_time = datetime.now()
         actions = []
 
         try:
             # Find accounts with insufficient contact attempts
-            insufficient_contact = dormant_accounts[
-                (dormant_accounts['contact_attempts_made'] < 3) |
-                (dormant_accounts['contact_attempts_made'].isna()) |
-                (dormant_accounts['last_contact_date'].isna())
-                ]
+            insufficient_contact = accounts_df[
+                (accounts_df[self.csv_columns['contact_attempts_made']] < 3) |
+                (accounts_df[self.csv_columns['contact_attempts_made']].isna()) |
+                (accounts_df[self.csv_columns['last_contact_date']].isna())
+            ].copy()
 
             for _, account in insufficient_contact.iterrows():
-                attempts_made = account.get('contact_attempts_made', 0)
+                attempts_made = account.get(self.csv_columns['contact_attempts_made'], 0)
 
                 if pd.isna(attempts_made) or attempts_made == 0:
                     action = self.generate_action(
@@ -144,7 +375,8 @@ class DetectIncompleteContactAttemptsAgent(ComplianceAgentBase):
                         "INITIATE_CONTACT_ATTEMPTS",
                         ActionPriority.CRITICAL,
                         1,  # 1 day deadline
-                        f"No contact attempts recorded. Initiate minimum 3 contact attempts via multiple channels."
+                        f"No contact attempts recorded. Initiate minimum 3 contact attempts via multiple channels.",
+                        2.0  # 2 hours estimated
                     )
                 elif attempts_made < 3:
                     remaining = 3 - int(attempts_made)
@@ -153,7 +385,8 @@ class DetectIncompleteContactAttemptsAgent(ComplianceAgentBase):
                         "COMPLETE_CONTACT_ATTEMPTS",
                         ActionPriority.CRITICAL,
                         3,  # 3 days deadline
-                        f"Complete {remaining} additional contact attempts. Current: {int(attempts_made)}/3"
+                        f"Complete {remaining} additional contact attempts. Current: {int(attempts_made)}/3",
+                        1.5  # 1.5 hours estimated
                     )
                 else:
                     action = self.generate_action(
@@ -161,7 +394,8 @@ class DetectIncompleteContactAttemptsAgent(ComplianceAgentBase):
                         "DOCUMENT_CONTACT_ATTEMPTS",
                         ActionPriority.HIGH,
                         7,  # 7 days deadline
-                        "Document and verify all contact attempts are properly recorded."
+                        "Document and verify all contact attempts are properly recorded.",
+                        0.5  # 0.5 hours estimated
                     )
 
                 actions.append(action)
@@ -172,22 +406,27 @@ class DetectIncompleteContactAttemptsAgent(ComplianceAgentBase):
                 agent_name=self.agent_name,
                 category=self.category,
                 cbuae_article=self.cbuae_article,
-                accounts_processed=len(dormant_accounts),
+                accounts_processed=len(accounts_df),
                 violations_found=len(insufficient_contact),
                 actions_generated=actions,
                 processing_time=processing_time,
-                success=True
+                success=True,
+                recommendations=[
+                    "Implement automated contact attempt tracking",
+                    "Establish multi-channel communication protocols",
+                    "Regular training on CBUAE contact requirements"
+                ]
             )
 
         except Exception as e:
             processing_time = (datetime.now() - start_time).total_seconds()
-            self.logger.error(f"Error in {self.agent_name}: {str(e)}")
+            logger.error(f"Error in {self.agent_name}: {str(e)}")
 
             return ComplianceResult(
                 agent_name=self.agent_name,
                 category=self.category,
                 cbuae_article=self.cbuae_article,
-                accounts_processed=len(dormant_accounts),
+                accounts_processed=len(accounts_df),
                 violations_found=0,
                 actions_generated=[],
                 processing_time=processing_time,
@@ -195,39 +434,43 @@ class DetectIncompleteContactAttemptsAgent(ComplianceAgentBase):
                 error_message=str(e)
             )
 
-
-class DetectUnflaggedDormantCandidatesAgent(ComplianceAgentBase):
+class DetectUnflaggedDormantCandidatesAgent(BaseComplianceAgent):
     """Contact & Communication - Art. 2: Unflagged dormancy detection"""
 
-    def __init__(self):
+    def __init__(self, memory_agent=None, mcp_client: MCPClient = None):
         super().__init__(
             agent_name="detect_unflagged_dormant_candidates",
             category=ComplianceCategory.CONTACT_COMMUNICATION,
-            cbuae_article="Art. 2"
+            cbuae_article=CBUAEArticle.ARTICLE_2_1_1.value,
+            memory_agent=memory_agent,
+            mcp_client=mcp_client
         )
 
-    def analyze(self, dormant_accounts: pd.DataFrame) -> ComplianceResult:
+    @traceable(name="unflagged_dormancy_compliance")
+    async def analyze_compliance(self, accounts_df: pd.DataFrame) -> ComplianceResult:
+        """Analyze unflagged dormancy compliance using CSV columns"""
         start_time = datetime.now()
         actions = []
 
         try:
             # Find accounts that meet dormancy criteria but aren't flagged
-            unflagged_dormant = dormant_accounts[
-                (dormant_accounts['dormancy_period_months'] >= 36) &
-                ((dormant_accounts['dormancy_status'] != 'DORMANT') |
-                 (dormant_accounts['dormancy_status'].isna()))
-                ]
+            unflagged_dormant = accounts_df[
+                (accounts_df[self.csv_columns['dormancy_period_months']] >= 36) &
+                ((accounts_df[self.csv_columns['dormancy_status']] != 'DORMANT') |
+                 (accounts_df[self.csv_columns['dormancy_status']].isna()))
+            ].copy()
 
             for _, account in unflagged_dormant.iterrows():
-                dormant_months = account.get('dormancy_period_months', 0)
-                current_status = account.get('dormancy_status', 'Unknown')
+                dormant_months = account.get(self.csv_columns['dormancy_period_months'], 0)
+                current_status = account.get(self.csv_columns['dormancy_status'], 'Unknown')
 
                 action = self.generate_action(
                     account,
                     "UPDATE_DORMANCY_STATUS",
                     ActionPriority.HIGH,
                     2,  # 2 days deadline
-                    f"Update account status to DORMANT (inactive for {dormant_months:.0f} months, current status: {current_status})"
+                    f"Update account status to DORMANT (inactive for {dormant_months:.0f} months, current status: {current_status})",
+                    1.0  # 1 hour estimated
                 )
                 actions.append(action)
 
@@ -237,22 +480,27 @@ class DetectUnflaggedDormantCandidatesAgent(ComplianceAgentBase):
                 agent_name=self.agent_name,
                 category=self.category,
                 cbuae_article=self.cbuae_article,
-                accounts_processed=len(dormant_accounts),
+                accounts_processed=len(accounts_df),
                 violations_found=len(unflagged_dormant),
                 actions_generated=actions,
                 processing_time=processing_time,
-                success=True
+                success=True,
+                recommendations=[
+                    "Implement automated dormancy status updates",
+                    "Regular review of dormancy classification criteria",
+                    "System alerts for dormancy threshold breaches"
+                ]
             )
 
         except Exception as e:
             processing_time = (datetime.now() - start_time).total_seconds()
-            self.logger.error(f"Error in {self.agent_name}: {str(e)}")
+            logger.error(f"Error in {self.agent_name}: {str(e)}")
 
             return ComplianceResult(
                 agent_name=self.agent_name,
                 category=self.category,
                 cbuae_article=self.cbuae_article,
-                accounts_processed=len(dormant_accounts),
+                accounts_processed=len(accounts_df),
                 violations_found=0,
                 actions_generated=[],
                 processing_time=processing_time,
@@ -260,43 +508,47 @@ class DetectUnflaggedDormantCandidatesAgent(ComplianceAgentBase):
                 error_message=str(e)
             )
 
+# ===== PROCESS MANAGEMENT AGENTS =====
 
-# ===== PROCESS MANAGEMENT AGENTS (3) =====
-
-class DetectInternalLedgerCandidatesAgent(ComplianceAgentBase):
+class DetectInternalLedgerCandidatesAgent(BaseComplianceAgent):
     """Process Management - Art. 3.4, 3.5: Internal ledger transfer detection"""
 
-    def __init__(self):
+    def __init__(self, memory_agent=None, mcp_client: MCPClient = None):
         super().__init__(
             agent_name="detect_internal_ledger_candidates",
             category=ComplianceCategory.PROCESS_MANAGEMENT,
-            cbuae_article="Art. 3.4, 3.5"
+            cbuae_article=CBUAEArticle.ARTICLE_3_4.value,
+            memory_agent=memory_agent,
+            mcp_client=mcp_client
         )
 
-    def analyze(self, dormant_accounts: pd.DataFrame) -> ComplianceResult:
+    @traceable(name="internal_ledger_compliance")
+    async def analyze_compliance(self, accounts_df: pd.DataFrame) -> ComplianceResult:
+        """Analyze internal ledger transfer compliance using CSV columns"""
         start_time = datetime.now()
         actions = []
 
         try:
             # Accounts eligible for internal ledger transfer
-            ledger_candidates = dormant_accounts[
-                (dormant_accounts['dormancy_period_months'] >= 39) &  # 3 years + 3 month waiting
-                (dormant_accounts['contact_attempts_made'] >= 3) &
-                (dormant_accounts['balance_current'] > 0) &
-                ((dormant_accounts['transferred_to_ledger_date'].isna()) |
-                 (dormant_accounts['transferred_to_ledger_date'] == ''))
-                ]
+            ledger_candidates = accounts_df[
+                (accounts_df[self.csv_columns['dormancy_period_months']] >= 39) &  # 3 years + 3 month waiting
+                (accounts_df[self.csv_columns['contact_attempts_made']] >= 3) &
+                (accounts_df[self.csv_columns['balance_current']] > 0) &
+                ((accounts_df[self.csv_columns['transferred_to_ledger_date']].isna()) |
+                 (accounts_df[self.csv_columns['transferred_to_ledger_date']] == ''))
+            ].copy()
 
             for _, account in ledger_candidates.iterrows():
-                balance = account.get('balance_current', 0)
-                dormant_months = account.get('dormancy_period_months', 0)
+                balance = account.get(self.csv_columns['balance_current'], 0)
+                dormant_months = account.get(self.csv_columns['dormancy_period_months'], 0)
 
                 action = self.generate_action(
                     account,
                     "TRANSFER_TO_INTERNAL_LEDGER",
                     ActionPriority.HIGH,
                     5,  # 5 days deadline
-                    f"Transfer to internal dormant ledger. Balance: {balance:.2f}, Dormant: {dormant_months:.0f} months"
+                    f"Transfer to internal dormant ledger. Balance: {balance:.2f}, Dormant: {dormant_months:.0f} months",
+                    3.0  # 3 hours estimated
                 )
                 actions.append(action)
 
@@ -306,22 +558,27 @@ class DetectInternalLedgerCandidatesAgent(ComplianceAgentBase):
                 agent_name=self.agent_name,
                 category=self.category,
                 cbuae_article=self.cbuae_article,
-                accounts_processed=len(dormant_accounts),
+                accounts_processed=len(accounts_df),
                 violations_found=len(ledger_candidates),
                 actions_generated=actions,
                 processing_time=processing_time,
-                success=True
+                success=True,
+                recommendations=[
+                    "Automate internal ledger transfer processes",
+                    "Establish clear ledger management procedures",
+                    "Regular audit of ledger transfers"
+                ]
             )
 
         except Exception as e:
             processing_time = (datetime.now() - start_time).total_seconds()
-            self.logger.error(f"Error in {self.agent_name}: {str(e)}")
+            logger.error(f"Error in {self.agent_name}: {str(e)}")
 
             return ComplianceResult(
                 agent_name=self.agent_name,
                 category=self.category,
                 cbuae_article=self.cbuae_article,
-                accounts_processed=len(dormant_accounts),
+                accounts_processed=len(accounts_df),
                 violations_found=0,
                 actions_generated=[],
                 processing_time=processing_time,
@@ -329,38 +586,42 @@ class DetectInternalLedgerCandidatesAgent(ComplianceAgentBase):
                 error_message=str(e)
             )
 
-
-class DetectStatementFreezeCandidatesAgent(ComplianceAgentBase):
+class DetectStatementFreezeCandidatesAgent(BaseComplianceAgent):
     """Process Management - Art. 7.3: Statement suppression detection"""
 
-    def __init__(self):
+    def __init__(self, memory_agent=None, mcp_client: MCPClient = None):
         super().__init__(
             agent_name="detect_statement_freeze_candidates",
             category=ComplianceCategory.PROCESS_MANAGEMENT,
-            cbuae_article="Art. 7.3"
+            cbuae_article=CBUAEArticle.ARTICLE_7_3.value,
+            memory_agent=memory_agent,
+            mcp_client=mcp_client
         )
 
-    def analyze(self, dormant_accounts: pd.DataFrame) -> ComplianceResult:
+    @traceable(name="statement_freeze_compliance")
+    async def analyze_compliance(self, accounts_df: pd.DataFrame) -> ComplianceResult:
+        """Analyze statement suppression compliance using CSV columns"""
         start_time = datetime.now()
         actions = []
 
         try:
             # Accounts eligible for statement suppression
-            freeze_candidates = dormant_accounts[
-                (dormant_accounts['dormancy_period_months'] >= 36) &
-                (dormant_accounts['statement_frequency'].isin(['MONTHLY', 'QUARTERLY'])) &
-                (dormant_accounts['statement_frequency'] != 'SUPPRESSED')
-                ]
+            freeze_candidates = accounts_df[
+                (accounts_df[self.csv_columns['dormancy_period_months']] >= 36) &
+                (accounts_df[self.csv_columns['statement_frequency']].isin(['MONTHLY', 'QUARTERLY'])) &
+                (accounts_df[self.csv_columns['statement_frequency']] != 'SUPPRESSED')
+            ].copy()
 
             for _, account in freeze_candidates.iterrows():
-                current_frequency = account.get('statement_frequency', 'Unknown')
+                current_frequency = account.get(self.csv_columns['statement_frequency'], 'Unknown')
 
                 action = self.generate_action(
                     account,
                     "SUPPRESS_STATEMENT_GENERATION",
                     ActionPriority.MEDIUM,
                     10,  # 10 days deadline
-                    f"Suppress regular statement generation. Current: {current_frequency} → SUPPRESSED"
+                    f"Suppress regular statement generation. Current: {current_frequency} → SUPPRESSED",
+                    0.5  # 0.5 hours estimated
                 )
                 actions.append(action)
 
@@ -370,22 +631,27 @@ class DetectStatementFreezeCandidatesAgent(ComplianceAgentBase):
                 agent_name=self.agent_name,
                 category=self.category,
                 cbuae_article=self.cbuae_article,
-                accounts_processed=len(dormant_accounts),
+                accounts_processed=len(accounts_df),
                 violations_found=len(freeze_candidates),
                 actions_generated=actions,
                 processing_time=processing_time,
-                success=True
+                success=True,
+                recommendations=[
+                    "Automate statement suppression for dormant accounts",
+                    "Cost-benefit analysis of statement generation",
+                    "Customer notification protocols for statement changes"
+                ]
             )
 
         except Exception as e:
             processing_time = (datetime.now() - start_time).total_seconds()
-            self.logger.error(f"Error in {self.agent_name}: {str(e)}")
+            logger.error(f"Error in {self.agent_name}: {str(e)}")
 
             return ComplianceResult(
                 agent_name=self.agent_name,
                 category=self.category,
                 cbuae_article=self.cbuae_article,
-                accounts_processed=len(dormant_accounts),
+                accounts_processed=len(accounts_df),
                 violations_found=0,
                 actions_generated=[],
                 processing_time=processing_time,
@@ -393,35 +659,38 @@ class DetectStatementFreezeCandidatesAgent(ComplianceAgentBase):
                 error_message=str(e)
             )
 
-
-class DetectCBUAETransferCandidatesAgent(ComplianceAgentBase):
+class DetectCBUAETransferCandidatesAgent(BaseComplianceAgent):
     """Process Management - Art. 8: CBUAE transfer detection"""
 
-    def __init__(self):
+    def __init__(self, memory_agent=None, mcp_client: MCPClient = None):
         super().__init__(
             agent_name="detect_cbuae_transfer_candidates",
             category=ComplianceCategory.PROCESS_MANAGEMENT,
-            cbuae_article="Art. 8"
+            cbuae_article=CBUAEArticle.ARTICLE_8.value,
+            memory_agent=memory_agent,
+            mcp_client=mcp_client
         )
 
-    def analyze(self, dormant_accounts: pd.DataFrame) -> ComplianceResult:
+    @traceable(name="cbuae_transfer_compliance")
+    async def analyze_compliance(self, accounts_df: pd.DataFrame) -> ComplianceResult:
+        """Analyze CBUAE transfer compliance using CSV columns"""
         start_time = datetime.now()
         actions = []
 
         try:
             # Accounts eligible for CBUAE transfer
-            transfer_candidates = dormant_accounts[
-                (dormant_accounts['dormancy_period_months'] >= 60) &  # 5+ years
-                (dormant_accounts['balance_current'] > 0) &
-                (dormant_accounts['address_known'] == 'No') &
-                ((dormant_accounts['transferred_to_cb_date'].isna()) |
-                 (dormant_accounts['transferred_to_cb_date'] == ''))
-                ]
+            transfer_candidates = accounts_df[
+                (accounts_df[self.csv_columns['dormancy_period_months']] >= 60) &  # 5+ years
+                (accounts_df[self.csv_columns['balance_current']] > 0) &
+                (accounts_df[self.csv_columns['address_known']] == 'No') &
+                ((accounts_df[self.csv_columns['transferred_to_cb_date']].isna()) |
+                 (accounts_df[self.csv_columns['transferred_to_cb_date']] == ''))
+            ].copy()
 
             for _, account in transfer_candidates.iterrows():
-                balance = account.get('balance_current', 0)
-                dormant_months = account.get('dormancy_period_months', 0)
-                currency = account.get('currency', 'AED')
+                balance = account.get(self.csv_columns['balance_current'], 0)
+                dormant_months = account.get(self.csv_columns['dormancy_period_months'], 0)
+                currency = account.get(self.csv_columns['currency'], 'AED')
 
                 if currency != 'AED':
                     action = self.generate_action(
@@ -429,7 +698,8 @@ class DetectCBUAETransferCandidatesAgent(ComplianceAgentBase):
                         "CONVERT_CURRENCY_FOR_CB_TRANSFER",
                         ActionPriority.HIGH,
                         7,  # 7 days deadline
-                        f"Convert {currency} balance to AED before CBUAE transfer. Balance: {balance:.2f} {currency}"
+                        f"Convert {currency} balance to AED before CBUAE transfer. Balance: {balance:.2f} {currency}",
+                        2.0  # 2 hours estimated
                     )
                 else:
                     action = self.generate_action(
@@ -437,7 +707,8 @@ class DetectCBUAETransferCandidatesAgent(ComplianceAgentBase):
                         "PREPARE_CBUAE_TRANSFER",
                         ActionPriority.HIGH,
                         14,  # 14 days deadline
-                        f"Prepare for CBUAE transfer. Balance: {balance:.2f} AED, Dormant: {dormant_months:.0f} months"
+                        f"Prepare for CBUAE transfer. Balance: {balance:.2f} AED, Dormant: {dormant_months:.0f} months",
+                        4.0  # 4 hours estimated
                     )
 
                 actions.append(action)
@@ -448,22 +719,27 @@ class DetectCBUAETransferCandidatesAgent(ComplianceAgentBase):
                 agent_name=self.agent_name,
                 category=self.category,
                 cbuae_article=self.cbuae_article,
-                accounts_processed=len(dormant_accounts),
+                accounts_processed=len(accounts_df),
                 violations_found=len(transfer_candidates),
                 actions_generated=actions,
                 processing_time=processing_time,
-                success=True
+                success=True,
+                recommendations=[
+                    "Establish CBUAE transfer preparation workflows",
+                    "Currency conversion protocols for foreign accounts",
+                    "Documentation requirements for CB transfers"
+                ]
             )
 
         except Exception as e:
             processing_time = (datetime.now() - start_time).total_seconds()
-            self.logger.error(f"Error in {self.agent_name}: {str(e)}")
+            logger.error(f"Error in {self.agent_name}: {str(e)}")
 
             return ComplianceResult(
                 agent_name=self.agent_name,
                 category=self.category,
                 cbuae_article=self.cbuae_article,
-                accounts_processed=len(dormant_accounts),
+                accounts_processed=len(accounts_df),
                 violations_found=0,
                 actions_generated=[],
                 processing_time=processing_time,
@@ -471,17 +747,18 @@ class DetectCBUAETransferCandidatesAgent(ComplianceAgentBase):
                 error_message=str(e)
             )
 
+# ===== SPECIALIZED COMPLIANCE AGENTS =====
 
-# ===== SPECIALIZED COMPLIANCE AGENTS (4) =====
-
-class DetectForeignCurrencyConversionNeededAgent(ComplianceAgentBase):
+class DetectForeignCurrencyConversionNeededAgent(BaseComplianceAgent):
     """Specialized Compliance - Art. 8.5: FX conversion detection"""
 
-    def __init__(self):
+    def __init__(self, memory_agent=None, mcp_client: MCPClient = None):
         super().__init__(
             agent_name="detect_foreign_currency_conversion_needed",
             category=ComplianceCategory.SPECIALIZED_COMPLIANCE,
-            cbuae_article="Art. 8.5"
+            cbuae_article=CBUAEArticle.ARTICLE_8_5.value,
+            memory_agent=memory_agent,
+            mcp_client=mcp_client
         )
 
         # CBUAE exchange rates (example rates)
@@ -493,22 +770,24 @@ class DetectForeignCurrencyConversionNeededAgent(ComplianceAgentBase):
             'AED': 1.0
         }
 
-    def analyze(self, dormant_accounts: pd.DataFrame) -> ComplianceResult:
+    @traceable(name="fx_conversion_compliance")
+    async def analyze_compliance(self, accounts_df: pd.DataFrame) -> ComplianceResult:
+        """Analyze foreign currency conversion compliance using CSV columns"""
         start_time = datetime.now()
         actions = []
 
         try:
             # Foreign currency accounts needing conversion
-            fx_conversion_needed = dormant_accounts[
-                (dormant_accounts['dormancy_period_months'] >= 60) &
-                (dormant_accounts['currency'] != 'AED') &
-                (dormant_accounts['currency'].notna()) &
-                (dormant_accounts['balance_current'] > 0)
-                ]
+            fx_conversion_needed = accounts_df[
+                (accounts_df[self.csv_columns['dormancy_period_months']] >= 60) &
+                (accounts_df[self.csv_columns['currency']] != 'AED') &
+                (accounts_df[self.csv_columns['currency']].notna()) &
+                (accounts_df[self.csv_columns['balance_current']] > 0)
+            ].copy()
 
             for _, account in fx_conversion_needed.iterrows():
-                currency = account.get('currency', 'Unknown')
-                balance = account.get('balance_current', 0)
+                currency = account.get(self.csv_columns['currency'], 'Unknown')
+                balance = account.get(self.csv_columns['balance_current'], 0)
                 exchange_rate = self.exchange_rates.get(currency, 1.0)
                 aed_equivalent = balance * exchange_rate
 
@@ -517,7 +796,8 @@ class DetectForeignCurrencyConversionNeededAgent(ComplianceAgentBase):
                     "CONVERT_FOREIGN_CURRENCY",
                     ActionPriority.MEDIUM,
                     7,  # 7 days deadline
-                    f"Convert {balance:.2f} {currency} to {aed_equivalent:.2f} AED (Rate: {exchange_rate})"
+                    f"Convert {balance:.2f} {currency} to {aed_equivalent:.2f} AED (Rate: {exchange_rate})",
+                    1.5  # 1.5 hours estimated
                 )
                 actions.append(action)
 
@@ -527,89 +807,27 @@ class DetectForeignCurrencyConversionNeededAgent(ComplianceAgentBase):
                 agent_name=self.agent_name,
                 category=self.category,
                 cbuae_article=self.cbuae_article,
-                accounts_processed=len(dormant_accounts),
+                accounts_processed=len(accounts_df),
                 violations_found=len(fx_conversion_needed),
                 actions_generated=actions,
                 processing_time=processing_time,
-                success=True
-            )
-
-        except Exception as e:
-            processing_time = (datetime.now() - start_time).total_seconds()
-            self.logger.error(f"Error in {self.agent_name}: {str(e)}")
-
-            return ComplianceResult(
-                agent_name=self.agent_name,
-                category=self.category,
-                cbuae_article=self.cbuae_article,
-                accounts_processed=len(dormant_accounts),
-                violations_found=0,
-                actions_generated=[],
-                processing_time=processing_time,
-                success=False,
-                error_message=str(e)
-            )
-
-
-class DetectSDBCourtApplicationNeededAgent(ComplianceAgentBase):
-    """Specialized Compliance - Art. 3.7: Safe Deposit Box court application"""
-
-    def __init__(self):
-        super().__init__(
-            agent_name="detect_sdb_court_application_needed",
-            category=ComplianceCategory.SPECIALIZED_COMPLIANCE,
-            cbuae_article="Art. 3.7"
-        )
-
-    def analyze(self, dormant_accounts: pd.DataFrame) -> ComplianceResult:
-        start_time = datetime.now()
-        actions = []
-
-        try:
-            # Safe deposit boxes needing court application
-            court_application_needed = dormant_accounts[
-                (dormant_accounts['box_id'].notna()) &
-                (dormant_accounts['outstanding_charges'] > 0) &
-                (dormant_accounts['dormancy_period_months'] >= 36) &
-                ((dormant_accounts['court_order_date'].isna()) |
-                 (dormant_accounts['court_order_date'] == ''))
+                success=True,
+                recommendations=[
+                    "Establish FX conversion protocols for dormant accounts",
+                    "Regular review of exchange rates",
+                    "Automated currency conversion workflows"
                 ]
-
-            for _, account in court_application_needed.iterrows():
-                box_id = account.get('box_id', 'Unknown')
-                charges = account.get('outstanding_charges', 0)
-
-                action = self.generate_action(
-                    account,
-                    "FILE_COURT_APPLICATION_SDB",
-                    ActionPriority.CRITICAL,
-                    3,  # 3 days deadline
-                    f"File court application for SDB {box_id}. Outstanding charges: {charges:.2f} AED"
-                )
-                actions.append(action)
-
-            processing_time = (datetime.now() - start_time).total_seconds()
-
-            return ComplianceResult(
-                agent_name=self.agent_name,
-                category=self.category,
-                cbuae_article=self.cbuae_article,
-                accounts_processed=len(dormant_accounts),
-                violations_found=len(court_application_needed),
-                actions_generated=actions,
-                processing_time=processing_time,
-                success=True
             )
 
         except Exception as e:
             processing_time = (datetime.now() - start_time).total_seconds()
-            self.logger.error(f"Error in {self.agent_name}: {str(e)}")
+            logger.error(f"Error in {self.agent_name}: {str(e)}")
 
             return ComplianceResult(
                 agent_name=self.agent_name,
                 category=self.category,
                 cbuae_article=self.cbuae_article,
-                accounts_processed=len(dormant_accounts),
+                accounts_processed=len(accounts_df),
                 violations_found=0,
                 actions_generated=[],
                 processing_time=processing_time,
@@ -617,179 +835,34 @@ class DetectSDBCourtApplicationNeededAgent(ComplianceAgentBase):
                 error_message=str(e)
             )
 
+class CheckRecordRetentionComplianceAgent(BaseComplianceAgent):
+    """Specialized Compliance - Art. 3.9: Record retention compliance"""
 
-class DetectUnclaimedPaymentInstrumentsLedgerAgent(ComplianceAgentBase):
-    """Specialized Compliance - Art. 3.6: Unclaimed instruments ledger"""
-
-    def __init__(self):
-        super().__init__(
-            agent_name="detect_unclaimed_payment_instruments_ledger",
-            category=ComplianceCategory.SPECIALIZED_COMPLIANCE,
-            cbuae_article="Art. 3.6"
-        )
-
-    def analyze(self, dormant_accounts: pd.DataFrame) -> ComplianceResult:
-        start_time = datetime.now()
-        actions = []
-
-        try:
-            # Unclaimed instruments needing ledger transfer
-            instruments_ledger = dormant_accounts[
-                (dormant_accounts['instrument_type'].notna()) &
-                (dormant_accounts['unclaimed_since'].notna()) &
-                ((dormant_accounts['transferred_to_ledger_date'].isna()) |
-                 (dormant_accounts['transferred_to_ledger_date'] == '')) &
-                (dormant_accounts['amount'] > 0)
-                ]
-
-            for _, account in instruments_ledger.iterrows():
-                instrument_type = account.get('instrument_type', 'Unknown')
-                amount = account.get('amount', 0)
-                unclaimed_since = account.get('unclaimed_since', 'Unknown')
-
-                action = self.generate_action(
-                    account,
-                    "TRANSFER_UNCLAIMED_INSTRUMENT_TO_LEDGER",
-                    ActionPriority.MEDIUM,
-                    7,  # 7 days deadline
-                    f"Transfer {instrument_type} to unclaimed ledger. Amount: {amount:.2f}, Unclaimed since: {unclaimed_since}"
-                )
-                actions.append(action)
-
-            processing_time = (datetime.now() - start_time).total_seconds()
-
-            return ComplianceResult(
-                agent_name=self.agent_name,
-                category=self.category,
-                cbuae_article=self.cbuae_article,
-                accounts_processed=len(dormant_accounts),
-                violations_found=len(instruments_ledger),
-                actions_generated=actions,
-                processing_time=processing_time,
-                success=True
-            )
-
-        except Exception as e:
-            processing_time = (datetime.now() - start_time).total_seconds()
-            self.logger.error(f"Error in {self.agent_name}: {str(e)}")
-
-            return ComplianceResult(
-                agent_name=self.agent_name,
-                category=self.category,
-                cbuae_article=self.cbuae_article,
-                accounts_processed=len(dormant_accounts),
-                violations_found=0,
-                actions_generated=[],
-                processing_time=processing_time,
-                success=False,
-                error_message=str(e)
-            )
-
-
-class DetectClaimProcessingPendingAgent(ComplianceAgentBase):
-    """Specialized Compliance - Art. 4: Customer claims processing"""
-
-    def __init__(self):
-        super().__init__(
-            agent_name="detect_claim_processing_pending",
-            category=ComplianceCategory.SPECIALIZED_COMPLIANCE,
-            cbuae_article="Art. 4"
-        )
-
-    def analyze(self, dormant_accounts: pd.DataFrame) -> ComplianceResult:
-        start_time = datetime.now()
-        actions = []
-
-        try:
-            # Pending customer claims
-            pending_claims = dormant_accounts[
-                (dormant_accounts['reclaim_status'].notna()) &
-                (dormant_accounts['reclaim_status'].isin(['PENDING', 'PROCESSING'])) &
-                (dormant_accounts['reclaim_date'].notna())
-                ]
-
-            current_date = pd.Timestamp.now()
-
-            for _, account in pending_claims.iterrows():
-                reclaim_date = pd.to_datetime(account.get('reclaim_date'), errors='coerce')
-                status = account.get('reclaim_status', 'Unknown')
-
-                if pd.notna(reclaim_date):
-                    days_pending = (current_date - reclaim_date).days
-
-                    if days_pending > 30:
-                        priority = ActionPriority.CRITICAL
-                        deadline_days = 1
-                    elif days_pending > 14:
-                        priority = ActionPriority.HIGH
-                        deadline_days = 3
-                    else:
-                        priority = ActionPriority.MEDIUM
-                        deadline_days = 7
-
-                    action = self.generate_action(
-                        account,
-                        "EXPEDITE_CLAIM_PROCESSING",
-                        priority,
-                        deadline_days,
-                        f"Process overdue customer reclaim. Status: {status}, Pending: {days_pending} days"
-                    )
-                    actions.append(action)
-
-            processing_time = (datetime.now() - start_time).total_seconds()
-
-            return ComplianceResult(
-                agent_name=self.agent_name,
-                category=self.category,
-                cbuae_article=self.cbuae_article,
-                accounts_processed=len(dormant_accounts),
-                violations_found=len(pending_claims),
-                actions_generated=actions,
-                processing_time=processing_time,
-                success=True
-            )
-
-        except Exception as e:
-            processing_time = (datetime.now() - start_time).total_seconds()
-            self.logger.error(f"Error in {self.agent_name}: {str(e)}")
-
-            return ComplianceResult(
-                agent_name=self.agent_name,
-                category=self.category,
-                cbuae_article=self.cbuae_article,
-                accounts_processed=len(dormant_accounts),
-                violations_found=0,
-                actions_generated=[],
-                processing_time=processing_time,
-                success=False,
-                error_message=str(e)
-            )
-
-
-# ===== REPORTING & RETENTION AGENTS (2) =====
-
-class CheckRecordRetentionComplianceAgent(ComplianceAgentBase):
-    """Reporting & Retention - Art. 3.9: Record retention compliance"""
-
-    def __init__(self):
+    def __init__(self, memory_agent=None, mcp_client: MCPClient = None):
         super().__init__(
             agent_name="check_record_retention_compliance",
-            category=ComplianceCategory.REPORTING_RETENTION,
-            cbuae_article="Art. 3.9"
+            category=ComplianceCategory.SPECIALIZED_COMPLIANCE,
+            cbuae_article=CBUAEArticle.ARTICLE_3_9.value,
+            memory_agent=memory_agent,
+            mcp_client=mcp_client
         )
 
-    def analyze(self, dormant_accounts: pd.DataFrame) -> ComplianceResult:
+    @traceable(name="record_retention_compliance")
+    async def analyze_compliance(self, accounts_df: pd.DataFrame) -> ComplianceResult:
+        """Analyze record retention compliance using CSV columns"""
         start_time = datetime.now()
         actions = []
 
         try:
             # Check for missing critical documentation
             critical_fields = [
-                'last_contact_date', 'contact_attempts_made', 'dormancy_trigger_date',
-                'dormancy_classification_date'
+                self.csv_columns['last_contact_date'],
+                self.csv_columns['contact_attempts_made'],
+                self.csv_columns['dormancy_trigger_date'],
+                self.csv_columns['dormancy_classification_date']
             ]
 
-            for _, account in dormant_accounts.iterrows():
+            for _, account in accounts_df.iterrows():
                 missing_fields = []
 
                 for field in critical_fields:
@@ -802,7 +875,8 @@ class CheckRecordRetentionComplianceAgent(ComplianceAgentBase):
                         "COMPLETE_RECORD_DOCUMENTATION",
                         ActionPriority.CRITICAL,
                         2,  # 2 days deadline
-                        f"Complete missing documentation: {', '.join(missing_fields)}"
+                        f"Complete missing documentation: {', '.join(missing_fields)}",
+                        2.0  # 2 hours estimated
                     )
                     actions.append(action)
 
@@ -812,22 +886,27 @@ class CheckRecordRetentionComplianceAgent(ComplianceAgentBase):
                 agent_name=self.agent_name,
                 category=self.category,
                 cbuae_article=self.cbuae_article,
-                accounts_processed=len(dormant_accounts),
+                accounts_processed=len(accounts_df),
                 violations_found=len(actions),
                 actions_generated=actions,
                 processing_time=processing_time,
-                success=True
+                success=True,
+                recommendations=[
+                    "Implement mandatory field validation",
+                    "Regular data quality audits",
+                    "Staff training on documentation requirements"
+                ]
             )
 
         except Exception as e:
             processing_time = (datetime.now() - start_time).total_seconds()
-            self.logger.error(f"Error in {self.agent_name}: {str(e)}")
+            logger.error(f"Error in {self.agent_name}: {str(e)}")
 
             return ComplianceResult(
                 agent_name=self.agent_name,
                 category=self.category,
                 cbuae_article=self.cbuae_article,
-                accounts_processed=len(dormant_accounts),
+                accounts_processed=len(accounts_df),
                 violations_found=0,
                 actions_generated=[],
                 processing_time=processing_time,
@@ -835,31 +914,36 @@ class CheckRecordRetentionComplianceAgent(ComplianceAgentBase):
                 error_message=str(e)
             )
 
+# ===== REPORTING & RETENTION AGENTS =====
 
-class GenerateAnnualCBUAEReportSummaryAgent(ComplianceAgentBase):
+class GenerateAnnualCBUAEReportSummaryAgent(BaseComplianceAgent):
     """Reporting & Retention - Art. 3.10: Annual CBUAE reporting"""
 
-    def __init__(self):
+    def __init__(self, memory_agent=None, mcp_client: MCPClient = None):
         super().__init__(
             agent_name="generate_annual_cbuae_report_summary",
             category=ComplianceCategory.REPORTING_RETENTION,
-            cbuae_article="Art. 3.10"
+            cbuae_article=CBUAEArticle.ARTICLE_3_10.value,
+            memory_agent=memory_agent,
+            mcp_client=mcp_client
         )
 
-    def analyze(self, dormant_accounts: pd.DataFrame) -> ComplianceResult:
+    @traceable(name="annual_reporting_compliance")
+    async def analyze_compliance(self, accounts_df: pd.DataFrame) -> ComplianceResult:
+        """Analyze annual reporting compliance using CSV columns"""
         start_time = datetime.now()
         actions = []
 
         try:
             # All dormant accounts with positive balances need to be in annual report
-            reporting_candidates = dormant_accounts[
-                (dormant_accounts['dormancy_period_months'] >= 12) &
-                (dormant_accounts['balance_current'] > 0)
-                ]
+            reporting_candidates = accounts_df[
+                (accounts_df[self.csv_columns['dormancy_period_months']] >= 12) &
+                (accounts_df[self.csv_columns['balance_current']] > 0)
+            ].copy()
 
             if len(reporting_candidates) > 0:
                 # Generate single action for annual reporting compilation
-                total_balance = reporting_candidates['balance_current'].sum()
+                total_balance = reporting_candidates[self.csv_columns['balance_current']].sum()
                 account_count = len(reporting_candidates)
 
                 # Use first account as representative (for action generation)
@@ -870,7 +954,8 @@ class GenerateAnnualCBUAEReportSummaryAgent(ComplianceAgentBase):
                     "COMPILE_ANNUAL_CBUAE_REPORT",
                     ActionPriority.MEDIUM,
                     30,  # 30 days deadline
-                    f"Compile annual CBUAE report for {account_count} dormant accounts. Total balance: {total_balance:.2f} AED"
+                    f"Compile annual CBUAE report for {account_count} dormant accounts. Total balance: {total_balance:.2f} AED",
+                    8.0  # 8 hours estimated
                 )
                 actions.append(action)
 
@@ -880,22 +965,27 @@ class GenerateAnnualCBUAEReportSummaryAgent(ComplianceAgentBase):
                 agent_name=self.agent_name,
                 category=self.category,
                 cbuae_article=self.cbuae_article,
-                accounts_processed=len(dormant_accounts),
+                accounts_processed=len(accounts_df),
                 violations_found=len(reporting_candidates),
                 actions_generated=actions,
                 processing_time=processing_time,
-                success=True
+                success=True,
+                recommendations=[
+                    "Automate annual report generation",
+                    "Establish reporting calendar and deadlines",
+                    "Quality assurance for regulatory reporting"
+                ]
             )
 
         except Exception as e:
             processing_time = (datetime.now() - start_time).total_seconds()
-            self.logger.error(f"Error in {self.agent_name}: {str(e)}")
+            logger.error(f"Error in {self.agent_name}: {str(e)}")
 
             return ComplianceResult(
                 agent_name=self.agent_name,
                 category=self.category,
                 cbuae_article=self.cbuae_article,
-                accounts_processed=len(dormant_accounts),
+                accounts_processed=len(accounts_df),
                 violations_found=0,
                 actions_generated=[],
                 processing_time=processing_time,
@@ -903,378 +993,488 @@ class GenerateAnnualCBUAEReportSummaryAgent(ComplianceAgentBase):
                 error_message=str(e)
             )
 
+# ===== MASTER COMPLIANCE ORCHESTRATOR =====
 
-# ===== UTILITY AGENTS (5) =====
+class ComplianceVerificationOrchestrator:
+    """LangGraph-based workflow orchestrator for comprehensive compliance verification"""
 
-class LogFlagInstructionsAgent(ComplianceAgentBase):
-    """Utility - Internal: Flagging instruction logger"""
-
-    def __init__(self):
-        super().__init__(
-            agent_name="log_flag_instructions",
-            category=ComplianceCategory.UTILITY,
-            cbuae_article="Internal"
-        )
-
-    def analyze(self, dormant_accounts: pd.DataFrame) -> ComplianceResult:
-        start_time = datetime.now()
-        actions = []
-
-        try:
-            # Log flagging instructions for all dormant accounts
-            for _, account in dormant_accounts.iterrows():
-                dormant_months = account.get('dormancy_period_months', 0)
-                status = account.get('dormancy_status', 'Unknown')
-
-                if dormant_months >= 36 and status != 'DORMANT':
-                    action = self.generate_action(
-                        account,
-                        "LOG_FLAGGING_INSTRUCTION",
-                        ActionPriority.LOW,
-                        30,  # 30 days deadline
-                        f"Log flagging instruction for dormant account ({dormant_months:.0f} months inactive)"
-                    )
-                    actions.append(action)
-
-            processing_time = (datetime.now() - start_time).total_seconds()
-
-            return ComplianceResult(
-                agent_name=self.agent_name,
-                category=self.category,
-                cbuae_article=self.cbuae_article,
-                accounts_processed=len(dormant_accounts),
-                violations_found=len(actions),
-                actions_generated=actions,
-                processing_time=processing_time,
-                success=True
-            )
-
-        except Exception as e:
-            processing_time = (datetime.now() - start_time).total_seconds()
-            self.logger.error(f"Error in {self.agent_name}: {str(e)}")
-
-            return ComplianceResult(
-                agent_name=self.agent_name,
-                category=self.category,
-                cbuae_article=self.cbuae_article,
-                accounts_processed=len(dormant_accounts),
-                violations_found=0,
-                actions_generated=[],
-                processing_time=processing_time,
-                success=False,
-                error_message=str(e)
-            )
-
-
-class DetectFlagCandidatesAgent(ComplianceAgentBase):
-    """Utility - Art. 2: Alias for unflagged dormant detection"""
-
-    def __init__(self):
-        super().__init__(
-            agent_name="detect_flag_candidates",
-            category=ComplianceCategory.UTILITY,
-            cbuae_article="Art. 2"
-        )
-
-    def analyze(self, dormant_accounts: pd.DataFrame) -> ComplianceResult:
-        # This is an alias/utility agent - delegates to main unflagged detection
-        unflagged_agent = DetectUnflaggedDormantCandidatesAgent()
-        result = unflagged_agent.analyze(dormant_accounts)
-
-        # Update agent name to reflect this is the utility version
-        result.agent_name = self.agent_name
-        return result
-
-
-class DetectLedgerCandidatesAgent(ComplianceAgentBase):
-    """Utility - Art. 3.4, 3.5: Alias for internal ledger detection"""
-
-    def __init__(self):
-        super().__init__(
-            agent_name="detect_ledger_candidates",
-            category=ComplianceCategory.UTILITY,
-            cbuae_article="Art. 3.4, 3.5"
-        )
-
-    def analyze(self, dormant_accounts: pd.DataFrame) -> ComplianceResult:
-        # This is an alias/utility agent - delegates to main ledger detection
-        ledger_agent = DetectInternalLedgerCandidatesAgent()
-        result = ledger_agent.analyze(dormant_accounts)
-
-        # Update agent name to reflect this is the utility version
-        result.agent_name = self.agent_name
-        return result
-
-
-class DetectFreezeCandidatesAgent(ComplianceAgentBase):
-    """Utility - Art. 7.3: Alias for statement freeze detection"""
-
-    def __init__(self):
-        super().__init__(
-            agent_name="detect_freeze_candidates",
-            category=ComplianceCategory.UTILITY,
-            cbuae_article="Art. 7.3"
-        )
-
-    def analyze(self, dormant_accounts: pd.DataFrame) -> ComplianceResult:
-        # This is an alias/utility agent - delegates to main statement freeze detection
-        freeze_agent = DetectStatementFreezeCandidatesAgent()
-        result = freeze_agent.analyze(dormant_accounts)
-
-        # Update agent name to reflect this is the utility version
-        result.agent_name = self.agent_name
-        return result
-
-
-class DetectTransferCandidatesToCBAgent(ComplianceAgentBase):
-    """Utility - Art. 8: Alias for CBUAE transfer detection"""
-
-    def __init__(self):
-        super().__init__(
-            agent_name="detect_transfer_candidates_to_cb",
-            category=ComplianceCategory.UTILITY,
-            cbuae_article="Art. 8"
-        )
-
-    def analyze(self, dormant_accounts: pd.DataFrame) -> ComplianceResult:
-        # This is an alias/utility agent - delegates to main CBUAE transfer detection
-        transfer_agent = DetectCBUAETransferCandidatesAgent()
-        result = transfer_agent.analyze(dormant_accounts)
-
-        # Update agent name to reflect this is the utility version
-        result.agent_name = self.agent_name
-        return result
-
-
-# ===== MASTER ORCHESTRATOR (1) =====
-
-class RunAllComplianceChecksAgent:
-    """Master Orchestrator - All: Main compliance analysis orchestrator"""
-
-    def __init__(self):
-        self.agent_name = "run_all_compliance_checks"
-        self.category = ComplianceCategory.UTILITY
-        self.logger = logging.getLogger("ComplianceOrchestrator")
+    def __init__(self, memory_agent=None, mcp_client: MCPClient = None):
+        self.memory_agent = memory_agent or MockMemoryAgent()
+        self.mcp_client = mcp_client or MCPClient()
 
         # Initialize all compliance agents
-        self.agents = [
+        self.agents = {
             # Contact & Communication (2)
-            DetectIncompleteContactAttemptsAgent(),
-            DetectUnflaggedDormantCandidatesAgent(),
+            "contact_attempts": DetectIncompleteContactAttemptsAgent(memory_agent, mcp_client),
+            "unflagged_dormant": DetectUnflaggedDormantCandidatesAgent(memory_agent, mcp_client),
 
             # Process Management (3)
-            DetectInternalLedgerCandidatesAgent(),
-            DetectStatementFreezeCandidatesAgent(),
-            DetectCBUAETransferCandidatesAgent(),
+            "internal_ledger": DetectInternalLedgerCandidatesAgent(memory_agent, mcp_client),
+            "statement_freeze": DetectStatementFreezeCandidatesAgent(memory_agent, mcp_client),
+            "cbuae_transfer": DetectCBUAETransferCandidatesAgent(memory_agent, mcp_client),
 
-            # Specialized Compliance (4)
-            DetectForeignCurrencyConversionNeededAgent(),
-            DetectSDBCourtApplicationNeededAgent(),
-            DetectUnclaimedPaymentInstrumentsLedgerAgent(),
-            DetectClaimProcessingPendingAgent(),
+            # Specialized Compliance (2)
+            "fx_conversion": DetectForeignCurrencyConversionNeededAgent(memory_agent, mcp_client),
+            "record_retention": CheckRecordRetentionComplianceAgent(memory_agent, mcp_client),
 
-            # Reporting & Retention (2)
-            CheckRecordRetentionComplianceAgent(),
-            GenerateAnnualCBUAEReportSummaryAgent(),
-
-            # Utility (5) - Note: These are aliases, can be excluded to avoid duplication
-            LogFlagInstructionsAgent(),
-            # DetectFlagCandidatesAgent(),      # Alias - commented to avoid duplication
-            # DetectLedgerCandidatesAgent(),    # Alias - commented to avoid duplication  
-            # DetectFreezeCandidatesAgent(),    # Alias - commented to avoid duplication
-            # DetectTransferCandidatesToCBAgent() # Alias - commented to avoid duplication
-        ]
-
-    def run_comprehensive_compliance_analysis(self, dormant_accounts: pd.DataFrame) -> Dict[str, Any]:
-        """Run all compliance agents on dormant accounts"""
-        start_time = datetime.now()
-
-        self.logger.info(f"Starting comprehensive compliance analysis on {len(dormant_accounts)} dormant accounts")
-
-        results = {
-            'analysis_timestamp': start_time.isoformat(),
-            'dormant_accounts_processed': len(dormant_accounts),
-            'agents_executed': len(self.agents),
-            'agent_results': {},
-            'consolidated_actions': [],
-            'summary_stats': {},
-            'success': True,
-            'errors': []
+            # Reporting & Retention (1)
+            "annual_reporting": GenerateAnnualCBUAEReportSummaryAgent(memory_agent, mcp_client)
         }
 
-        total_violations = 0
-        total_actions = 0
-        agent_performance = []
+        # Initialize LangGraph workflow
+        self.workflow = self._create_workflow()
 
-        for agent in self.agents:
-            try:
-                self.logger.info(f"Executing agent: {agent.agent_name}")
+    def _create_workflow(self) -> StateGraph:
+        """Create comprehensive LangGraph workflow for compliance verification"""
 
-                agent_result = agent.analyze(dormant_accounts)
+        workflow = StateGraph(ComplianceState)
 
-                results['agent_results'][agent.agent_name] = {
-                    'category': agent_result.category.value,
-                    'cbuae_article': agent_result.cbuae_article,
-                    'accounts_processed': agent_result.accounts_processed,
-                    'violations_found': agent_result.violations_found,
-                    'actions_generated': len(agent_result.actions_generated),
-                    'processing_time': agent_result.processing_time,
-                    'success': agent_result.success,
-                    'error_message': agent_result.error_message
-                }
+        # Add nodes for compliance verification workflow
+        workflow.add_node("initialize", self._initialize_compliance_verification)
+        workflow.add_node("execute_agents", self._execute_all_compliance_agents)
+        workflow.add_node("consolidate_results", self._consolidate_compliance_results)
+        workflow.add_node("generate_action_plan", self._generate_action_plan)
+        workflow.add_node("finalize", self._finalize_compliance_verification)
 
-                if agent_result.success:
-                    total_violations += agent_result.violations_found
-                    total_actions += len(agent_result.actions_generated)
-                    results['consolidated_actions'].extend(agent_result.actions_generated)
+        # Define workflow edges
+        workflow.add_edge(START, "initialize")
+        workflow.add_edge("initialize", "execute_agents")
+        workflow.add_edge("execute_agents", "consolidate_results")
+        workflow.add_edge("consolidate_results", "generate_action_plan")
+        workflow.add_edge("generate_action_plan", "finalize")
+        workflow.add_edge("finalize", END)
 
-                    agent_performance.append({
-                        'agent': agent.agent_name,
-                        'category': agent_result.category.value,
-                        'violations': agent_result.violations_found,
-                        'actions': len(agent_result.actions_generated),
-                        'processing_time': agent_result.processing_time
-                    })
-                else:
-                    results['errors'].append({
-                        'agent': agent.agent_name,
-                        'error': agent_result.error_message
-                    })
+        return workflow.compile(checkpointer=MemorySaver())
 
-            except Exception as e:
-                error_msg = f"Failed to execute agent {agent.agent_name}: {str(e)}"
-                self.logger.error(error_msg)
-                results['errors'].append({
-                    'agent': agent.agent_name,
-                    'error': error_msg
-                })
-                results['success'] = False
+    async def _initialize_compliance_verification(self, state: ComplianceState) -> ComplianceState:
+        """Initialize compliance verification workflow"""
+        try:
+            state.verification_status = ComplianceStatus.UNDER_REVIEW
 
-        # Calculate summary statistics
-        processing_time = (datetime.now() - start_time).total_seconds()
+            state.verification_log.append({
+                "timestamp": datetime.now().isoformat(),
+                "stage": "compliance_verification_initialization",
+                "status": "started",
+                "total_agents": len(self.agents),
+                "cbuae_articles_covered": self._get_covered_articles()
+            })
 
-        results['summary_stats'] = {
-            'total_violations_found': total_violations,
-            'total_actions_generated': total_actions,
-            'total_processing_time': processing_time,
-            'average_processing_time_per_agent': processing_time / len(self.agents) if self.agents else 0,
-            'agents_with_violations': len([r for r in results['agent_results'].values() if r['violations_found'] > 0]),
-            'compliance_rate': ((len(dormant_accounts) - total_violations) / len(
-                dormant_accounts) * 100) if dormant_accounts is not None and len(dormant_accounts) > 0 else 100
-        }
+            return state
 
-        # Priority breakdown
-        priority_breakdown = {'CRITICAL': 0, 'HIGH': 0, 'MEDIUM': 0, 'LOW': 0}
-        for action in results['consolidated_actions']:
-            priority_breakdown[action.priority.value] += 1
+        except Exception as e:
+            logger.error(f"Compliance verification initialization failed: {str(e)}")
+            state.verification_status = ComplianceStatus.NON_COMPLIANT
+            return state
 
-        results['priority_breakdown'] = priority_breakdown
+    async def _execute_all_compliance_agents(self, state: ComplianceState) -> ComplianceState:
+        """Execute all compliance agents"""
+        try:
+            accounts_df = pd.DataFrame(state.processed_data['accounts'])
 
-        # Category breakdown
-        category_breakdown = {}
-        for agent_name, agent_result in results['agent_results'].items():
-            category = agent_result['category']
-            if category not in category_breakdown:
-                category_breakdown[category] = {
-                    'agents': 0,
-                    'violations': 0,
-                    'actions': 0
-                }
-            category_breakdown[category]['agents'] += 1
-            category_breakdown[category]['violations'] += agent_result['violations_found']
-            category_breakdown[category]['actions'] += agent_result['actions_generated']
+            logger.info(f"Executing {len(self.agents)} compliance agents on {len(accounts_df)} accounts")
 
-        results['category_breakdown'] = category_breakdown
+            # Execute all agents
+            for agent_name, agent in self.agents.items():
+                try:
+                    logger.info(f"Executing compliance agent: {agent_name}")
 
-        self.logger.info(
-            f"Compliance analysis completed. {total_violations} violations found, {total_actions} actions generated")
+                    # Execute agent
+                    compliance_result = await agent.analyze_compliance(accounts_df)
+                    state.agent_results[agent_name] = compliance_result
 
-        return results
+                    if compliance_result.success:
+                        state.completed_agents.append(agent_name)
+                        state.total_violations_found += compliance_result.violations_found
+                        state.total_actions_generated += len(compliance_result.actions_generated)
 
-    def generate_action_plan(self, compliance_results: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate prioritized action plan from compliance results"""
+                        logger.info(f"Agent {agent_name} completed: {compliance_result.violations_found} violations found")
+                    else:
+                        state.failed_agents.append(agent_name)
+                        logger.warning(f"Agent {agent_name} failed: {compliance_result.error_message}")
 
-        actions = compliance_results.get('consolidated_actions', [])
+                except Exception as e:
+                    logger.error(f"Agent {agent_name} execution failed: {str(e)}")
+                    state.failed_agents.append(agent_name)
 
-        if not actions:
-            return {
-                'action_plan': [],
-                'execution_timeline': {},
-                'resource_requirements': {},
-                'priority_summary': {}
+            state.total_accounts_verified = len(accounts_df)
+            return state
+
+        except Exception as e:
+            logger.error(f"Compliance agent execution failed: {str(e)}")
+            return state
+
+    async def _consolidate_compliance_results(self, state: ComplianceState) -> ComplianceState:
+        """Consolidate compliance verification results"""
+        try:
+            # Consolidate all compliance results
+            consolidated = {
+                "compliance_summary": {
+                    "total_agents_executed": len(state.completed_agents),
+                    "total_accounts_verified": state.total_accounts_verified,
+                    "total_violations_found": state.total_violations_found,
+                    "total_actions_generated": state.total_actions_generated,
+                    "overall_compliance_rate": self._calculate_overall_compliance_rate(state),
+                    "risk_assessment": self._assess_overall_risk(state)
+                },
+                "agent_results": {},
+                "category_breakdown": {},
+                "priority_breakdown": {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0},
+                "consolidated_actions": []
             }
 
-        # Sort actions by priority and deadline
-        priority_order = {
-            ActionPriority.CRITICAL: 0,
-            ActionPriority.HIGH: 1,
-            ActionPriority.MEDIUM: 2,
-            ActionPriority.LOW: 3
-        }
+            # Process agent results
+            for agent_name in state.completed_agents:
+                agent_result = state.agent_results[agent_name]
 
-        sorted_actions = sorted(actions, key=lambda x: (priority_order[x.priority], x.deadline))
+                consolidated["agent_results"][agent_name] = {
+                    "category": agent_result.category.value,
+                    "cbuae_article": agent_result.cbuae_article,
+                    "accounts_processed": agent_result.accounts_processed,
+                    "violations_found": agent_result.violations_found,
+                    "actions_generated": len(agent_result.actions_generated),
+                    "compliance_rate": agent_result.compliance_rate,
+                    "risk_level": agent_result.risk_level,
+                    "processing_time": agent_result.processing_time,
+                    "recommendations": agent_result.recommendations
+                }
 
-        # Group actions by timeline
-        timeline_groups = {
-            'immediate': [],  # Due within 24 hours
-            'urgent': [],  # Due within 7 days
-            'short_term': [],  # Due within 30 days
-            'long_term': []  # Due beyond 30 days
-        }
+                # Add actions to consolidated list
+                consolidated["consolidated_actions"].extend(agent_result.actions_generated)
 
-        now = datetime.now()
+                # Update priority breakdown
+                for action in agent_result.actions_generated:
+                    consolidated["priority_breakdown"][action.priority.value] += 1
 
-        for action in sorted_actions:
-            days_to_deadline = (action.deadline - now).days
+                # Update category breakdown
+                category = agent_result.category.value
+                if category not in consolidated["category_breakdown"]:
+                    consolidated["category_breakdown"][category] = {
+                        "agents": 0,
+                        "violations": 0,
+                        "actions": 0,
+                        "avg_compliance_rate": 0.0
+                    }
 
-            if days_to_deadline <= 1:
-                timeline_groups['immediate'].append(action)
-            elif days_to_deadline <= 7:
-                timeline_groups['urgent'].append(action)
-            elif days_to_deadline <= 30:
-                timeline_groups['short_term'].append(action)
+                consolidated["category_breakdown"][category]["agents"] += 1
+                consolidated["category_breakdown"][category]["violations"] += agent_result.violations_found
+                consolidated["category_breakdown"][category]["actions"] += len(agent_result.actions_generated)
+
+            # Calculate average compliance rates by category
+            for category, stats in consolidated["category_breakdown"].items():
+                category_agents = [
+                    result for result in state.agent_results.values()
+                    if result.category.value == category and result.success
+                ]
+                if category_agents:
+                    stats["avg_compliance_rate"] = sum(r.compliance_rate for r in category_agents) / len(category_agents)
+
+            state.compliance_summary = consolidated
+            return state
+
+        except Exception as e:
+            logger.error(f"Compliance result consolidation failed: {str(e)}")
+            return state
+
+    async def _generate_action_plan(self, state: ComplianceState) -> ComplianceState:
+        """Generate prioritized action plan"""
+        try:
+            actions = state.compliance_summary.get("consolidated_actions", [])
+
+            if not actions:
+                state.action_plan = {
+                    "action_plan": [],
+                    "execution_timeline": {},
+                    "resource_requirements": {},
+                    "priority_summary": {}
+                }
+                return state
+
+            # Sort actions by priority and deadline
+            priority_order = {
+                ActionPriority.CRITICAL: 0,
+                ActionPriority.HIGH: 1,
+                ActionPriority.MEDIUM: 2,
+                ActionPriority.LOW: 3
+            }
+
+            sorted_actions = sorted(actions, key=lambda x: (priority_order[x.priority], x.deadline))
+
+            # Group actions by timeline
+            timeline_groups = {
+                'immediate': [],  # Due within 24 hours
+                'urgent': [],     # Due within 7 days
+                'short_term': [], # Due within 30 days
+                'long_term': []   # Due beyond 30 days
+            }
+
+            now = datetime.now()
+
+            for action in sorted_actions:
+                days_to_deadline = (action.deadline - now).days
+
+                if days_to_deadline <= 1:
+                    timeline_groups['immediate'].append(action)
+                elif days_to_deadline <= 7:
+                    timeline_groups['urgent'].append(action)
+                elif days_to_deadline <= 30:
+                    timeline_groups['short_term'].append(action)
+                else:
+                    timeline_groups['long_term'].append(action)
+
+            # Generate resource requirements estimate
+            resource_requirements = {
+                'compliance_officers': len([a for a in actions if a.priority in [ActionPriority.CRITICAL, ActionPriority.HIGH]]),
+                'estimated_total_hours': sum(a.estimated_effort_hours for a in actions),
+                'critical_actions': len([a for a in actions if a.priority == ActionPriority.CRITICAL]),
+                'system_updates_required': len([a for a in actions if any(
+                    keyword in a.action_type.lower() for keyword in ['status', 'suppress', 'transfer', 'convert'])]),
+                'customer_contact_required': len([a for a in actions if 'contact' in a.action_type.lower()])
+            }
+
+            state.action_plan = {
+                'action_plan': [
+                    {
+                        'account_id': action.account_id,
+                        'customer_id': action.customer_id,
+                        'action_type': action.action_type,
+                        'priority': action.priority.value,
+                        'deadline': action.deadline.isoformat(),
+                        'description': action.description,
+                        'cbuae_article': action.cbuae_article,
+                        'assigned_agent': action.assigned_agent,
+                        'estimated_hours': action.estimated_effort_hours,
+                        'days_to_deadline': (action.deadline - now).days
+                    } for action in sorted_actions
+                ],
+                'execution_timeline': {
+                    'immediate_actions': len(timeline_groups['immediate']),
+                    'urgent_actions': len(timeline_groups['urgent']),
+                    'short_term_actions': len(timeline_groups['short_term']),
+                    'long_term_actions': len(timeline_groups['long_term'])
+                },
+                'resource_requirements': resource_requirements,
+                'priority_summary': state.compliance_summary.get('priority_breakdown', {})
+            }
+
+            return state
+
+        except Exception as e:
+            logger.error(f"Action plan generation failed: {str(e)}")
+            return state
+
+    async def _finalize_compliance_verification(self, state: ComplianceState) -> ComplianceState:
+        """Finalize compliance verification"""
+        try:
+            if state.verification_status != ComplianceStatus.NON_COMPLIANT:
+                # Determine final compliance status
+                overall_compliance_rate = state.compliance_summary.get("compliance_summary", {}).get("overall_compliance_rate", 0)
+
+                if overall_compliance_rate >= 95:
+                    state.verification_status = ComplianceStatus.COMPLIANT
+                elif overall_compliance_rate >= 80:
+                    state.verification_status = ComplianceStatus.ACTION_REQUIRED
+                else:
+                    state.verification_status = ComplianceStatus.NON_COMPLIANT
+
+            # Create comprehensive final results
+            state.compliance_results = {
+                "session_id": state.session_id,
+                "verification_type": "comprehensive_cbuae_compliance_verification",
+                "total_cbuae_articles_covered": len(self._get_covered_articles()),
+                "verification_summary": state.compliance_summary,
+                "action_plan": state.action_plan,
+                "final_compliance_status": state.verification_status.value,
+                "completion_timestamp": datetime.now().isoformat(),
+                "data_source_info": {
+                    "source": "banking_compliance_dataset_csv",
+                    "total_records": state.total_accounts_verified,
+                    "agents_executed": len(state.completed_agents),
+                    "agents_failed": len(state.failed_agents)
+                }
+            }
+
+            return state
+
+        except Exception as e:
+            logger.error(f"Compliance verification finalization failed: {str(e)}")
+            state.verification_status = ComplianceStatus.NON_COMPLIANT
+            return state
+
+    def _get_covered_articles(self) -> List[str]:
+        """Get list of CBUAE articles covered by the agents"""
+        return [
+            "Art. 2.1.1", "Art. 3.1", "Art. 3.4", "Art. 3.9", "Art. 3.10",
+            "Art. 7.3", "Art. 8", "Art. 8.5"
+        ]
+
+    def _calculate_overall_compliance_rate(self, state: ComplianceState) -> float:
+        """Calculate overall compliance rate"""
+        if state.total_accounts_verified == 0:
+            return 100.0
+
+        compliant_accounts = state.total_accounts_verified - state.total_violations_found
+        return (compliant_accounts / state.total_accounts_verified) * 100
+
+    def _assess_overall_risk(self, state: ComplianceState) -> str:
+        """Assess overall compliance risk"""
+        compliance_rate = self._calculate_overall_compliance_rate(state)
+
+        if compliance_rate >= 95:
+            return "LOW"
+        elif compliance_rate >= 80:
+            return "MEDIUM"
+        elif compliance_rate >= 60:
+            return "HIGH"
+        else:
+            return "CRITICAL"
+
+    async def orchestrate_compliance_verification(self, user_id: str, input_dataframe: pd.DataFrame,
+                                                  verification_config: Dict = None) -> Dict:
+        """Orchestrate comprehensive compliance verification"""
+        try:
+            # Create initial state
+            initial_state = ComplianceState(
+                session_id=secrets.token_hex(16),
+                user_id=user_id,
+                verification_id=secrets.token_hex(16),
+                timestamp=datetime.now(),
+                processed_data={'accounts': input_dataframe.to_dict('records')},
+                verification_config=verification_config or {}
+            )
+
+            # Execute comprehensive workflow
+            final_state = await self.workflow.ainvoke(initial_state)
+
+            return final_state.compliance_results
+
+        except Exception as e:
+            logger.error(f"Compliance verification orchestration failed: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "session_id": initial_state.session_id if 'initial_state' in locals() else None,
+                "verification_type": "comprehensive_cbuae_compliance_verification"
+            }
+
+# ===== MAIN COMPLIANCE VERIFICATION AGENT =====
+
+class ComplianceVerificationAgent:
+    """Main comprehensive compliance verification agent"""
+
+    def __init__(self, memory_agent=None, mcp_client: MCPClient = None, db_session=None):
+        self.memory_agent = memory_agent or MockMemoryAgent()
+        self.mcp_client = mcp_client or MCPClient()
+        self.db_session = db_session
+
+        try:
+            self.langsmith_client = LangSmithClient()
+        except:
+            self.langsmith_client = None
+
+        # Initialize compliance orchestrator
+        self.orchestrator = ComplianceVerificationOrchestrator(memory_agent, mcp_client)
+
+    @traceable(name="comprehensive_compliance_verification")
+    async def verify_compliance(self, state: ComplianceState) -> ComplianceState:
+        """Main comprehensive compliance verification"""
+        try:
+            start_time = datetime.now()
+            state.verification_status = ComplianceStatus.UNDER_REVIEW
+
+            # Extract account data
+            if not state.processed_data or 'accounts' not in state.processed_data:
+                raise ValueError("No account data available for compliance verification")
+
+            accounts_df = pd.DataFrame(state.processed_data['accounts'])
+            if accounts_df.empty:
+                raise ValueError("Empty account data provided")
+
+            logger.info(f"Starting comprehensive compliance verification on {len(accounts_df)} accounts")
+
+            # Execute comprehensive orchestrated verification
+            verification_results = await self.orchestrator.orchestrate_compliance_verification(
+                user_id=state.user_id,
+                input_dataframe=accounts_df,
+                verification_config=state.verification_config
+            )
+
+            # Process verification results
+            if verification_results and not verification_results.get("success") == False:
+                state.compliance_results = verification_results
+                state.compliance_summary = verification_results.get("verification_summary", {})
+                state.action_plan = verification_results.get("action_plan", {})
+
+                # Extract metrics
+                summary = state.compliance_summary.get("compliance_summary", {})
+                state.total_accounts_verified = summary.get("total_accounts_verified", 0)
+                state.total_violations_found = summary.get("total_violations_found", 0)
+                state.total_actions_generated = summary.get("total_actions_generated", 0)
+
+                # Calculate processing metrics
+                state.processing_time = (datetime.now() - start_time).total_seconds()
+                state.verification_efficiency = (
+                    state.total_accounts_verified / state.processing_time
+                    if state.processing_time > 0 else 0
+                )
+
+                # Determine final status
+                compliance_rate = summary.get("overall_compliance_rate", 0)
+                if compliance_rate >= 95:
+                    state.verification_status = ComplianceStatus.COMPLIANT
+                elif compliance_rate >= 80:
+                    state.verification_status = ComplianceStatus.ACTION_REQUIRED
+                else:
+                    state.verification_status = ComplianceStatus.NON_COMPLIANT
+
+                # Log successful verification
+                state.verification_log.append({
+                    "timestamp": datetime.now().isoformat(),
+                    "stage": "comprehensive_compliance_verification",
+                    "status": "completed",
+                    "verification_type": "full_cbuae_compliance_verification",
+                    "compliance_status": state.verification_status.value,
+                    "total_violations": state.total_violations_found,
+                    "total_actions": state.total_actions_generated,
+                    "processing_time": state.processing_time,
+                    "compliance_rate": compliance_rate
+                })
             else:
-                timeline_groups['long_term'].append(action)
+                state.verification_status = ComplianceStatus.NON_COMPLIANT
+                error_msg = verification_results.get("error", "Unknown verification error")
+                state.error_log.append({
+                    "timestamp": datetime.now().isoformat(),
+                    "stage": "compliance_verification_orchestration",
+                    "error": error_msg,
+                    "verification_type": "full_cbuae_compliance_verification"
+                })
 
-        # Generate resource requirements estimate
-        resource_requirements = {
-            'compliance_officers': len(
-                [a for a in actions if a.priority in [ActionPriority.CRITICAL, ActionPriority.HIGH]]),
-            'legal_review_required': len(
-                [a for a in actions if 'court' in a.action_type.lower() or 'legal' in a.description.lower()]),
-            'system_updates_required': len([a for a in actions if any(
-                keyword in a.action_type.lower() for keyword in ['status', 'suppress', 'transfer', 'convert'])]),
-            'customer_contact_required': len([a for a in actions if 'contact' in a.action_type.lower()]),
-            'estimated_total_hours': len(actions) * 2  # Estimate 2 hours per action
-        }
+        except Exception as e:
+            state.verification_status = ComplianceStatus.NON_COMPLIANT
+            state.error_log.append({
+                "timestamp": datetime.now().isoformat(),
+                "stage": "comprehensive_compliance_verification",
+                "error": str(e),
+                "verification_type": "full_cbuae_compliance_verification"
+            })
+            logger.error(f"Comprehensive compliance verification failed: {str(e)}")
 
-        return {
-            'action_plan': [
-                {
-                    'account_id': action.account_id,
-                    'action_type': action.action_type,
-                    'priority': action.priority.value,
-                    'deadline': action.deadline.isoformat(),
-                    'description': action.description,
-                    'cbuae_article': action.cbuae_article,
-                    'assigned_agent': action.assigned_agent,
-                    'days_to_deadline': (action.deadline - now).days
-                } for action in sorted_actions
-            ],
-            'execution_timeline': {
-                'immediate_actions': len(timeline_groups['immediate']),
-                'urgent_actions': len(timeline_groups['urgent']),
-                'short_term_actions': len(timeline_groups['short_term']),
-                'long_term_actions': len(timeline_groups['long_term'])
-            },
-            'resource_requirements': resource_requirements,
-            'priority_summary': compliance_results.get('priority_breakdown', {})
-        }
+        return state
 
+# ===== FACTORY FUNCTIONS AND UTILITIES =====
 
-# ===== HELPER FUNCTIONS =====
+def create_compliance_verification_agent(
+    memory_agent=None,
+    mcp_client: MCPClient = None,
+    db_session=None
+) -> ComplianceVerificationAgent:
+    """Factory function to create compliance verification agent"""
+    return ComplianceVerificationAgent(
+        memory_agent=memory_agent,
+        mcp_client=mcp_client,
+        db_session=db_session
+    )
 
-def get_all_compliance_agents() -> List[ComplianceAgentBase]:
+def get_all_compliance_agents() -> List[BaseComplianceAgent]:
     """Get list of all compliance agents"""
     return [
         # Contact & Communication (2)
@@ -1286,25 +1486,17 @@ def get_all_compliance_agents() -> List[ComplianceAgentBase]:
         DetectStatementFreezeCandidatesAgent(),
         DetectCBUAETransferCandidatesAgent(),
 
-        # Specialized Compliance (4)
+        # Specialized Compliance (2)
         DetectForeignCurrencyConversionNeededAgent(),
-        DetectSDBCourtApplicationNeededAgent(),
-        DetectUnclaimedPaymentInstrumentsLedgerAgent(),
-        DetectClaimProcessingPendingAgent(),
-
-        # Reporting & Retention (2)
         CheckRecordRetentionComplianceAgent(),
-        GenerateAnnualCBUAEReportSummaryAgent(),
 
-        # Utility (1) - Only non-alias utility agent
-        LogFlagInstructionsAgent()
+        # Reporting & Retention (1)
+        GenerateAnnualCBUAEReportSummaryAgent()
     ]
 
-
-def get_compliance_agents_by_category() -> Dict[ComplianceCategory, List[ComplianceAgentBase]]:
+def get_compliance_agents_by_category() -> Dict[ComplianceCategory, List[BaseComplianceAgent]]:
     """Get compliance agents grouped by category"""
     agents = get_all_compliance_agents()
-
     categorized = {category: [] for category in ComplianceCategory}
 
     for agent in agents:
@@ -1312,37 +1504,30 @@ def get_compliance_agents_by_category() -> Dict[ComplianceCategory, List[Complia
 
     return categorized
 
-
-def run_compliance_analysis_on_dormant_accounts(dormant_accounts: pd.DataFrame,
-                                                include_action_plan: bool = True) -> Dict[str, Any]:
-    """Main function to run compliance analysis on dormant accounts"""
-
-    orchestrator = RunAllComplianceChecksAgent()
-
-    # Run comprehensive compliance analysis
-    compliance_results = orchestrator.run_comprehensive_compliance_analysis(dormant_accounts)
-
-    # Generate action plan if requested
-    if include_action_plan and compliance_results['success']:
-        action_plan = orchestrator.generate_action_plan(compliance_results)
-        compliance_results['action_plan'] = action_plan
-
-    return compliance_results
-
-
 def export_compliance_actions_to_csv(compliance_results: Dict[str, Any],
-                                     filename: Optional[str] = None) -> str:
+                                   filename: Optional[str] = None) -> str:
     """Export compliance actions to CSV format"""
 
-    actions = compliance_results.get('consolidated_actions', [])
+    # Extract actions from compliance results
+    actions = []
+    if 'verification_summary' in compliance_results:
+        actions = compliance_results['verification_summary'].get('consolidated_actions', [])
+    elif 'consolidated_actions' in compliance_results:
+        actions = compliance_results['consolidated_actions']
 
     if not actions:
-        return "account_id,action_type,priority,deadline,description,cbuae_article,assigned_agent,status\n"
+        csv_header = "account_id,customer_id,action_type,priority,deadline,description,cbuae_article,assigned_agent,status,estimated_hours\n"
+        if filename:
+            with open(filename, 'w') as f:
+                f.write(csv_header)
+            return f"Empty actions exported to {filename}"
+        return csv_header
 
     csv_data = []
     for action in actions:
         csv_data.append({
             'account_id': action.account_id,
+            'customer_id': action.customer_id,
             'action_type': action.action_type,
             'priority': action.priority.value,
             'deadline': action.deadline.strftime('%Y-%m-%d %H:%M:%S'),
@@ -1350,7 +1535,7 @@ def export_compliance_actions_to_csv(compliance_results: Dict[str, Any],
             'cbuae_article': action.cbuae_article,
             'assigned_agent': action.assigned_agent,
             'status': action.status.value,
-            'created_date': action.created_date.strftime('%Y-%m-%d %H:%M:%S')
+            'estimated_hours': action.estimated_effort_hours
         })
 
     df = pd.DataFrame(csv_data)
@@ -1360,7 +1545,6 @@ def export_compliance_actions_to_csv(compliance_results: Dict[str, Any],
         return f"Actions exported to {filename}"
     else:
         return df.to_csv(index=False)
-
 
 def get_compliance_agent_coverage() -> Dict[str, Any]:
     """Get coverage information for compliance agents"""
@@ -1396,19 +1580,256 @@ def get_compliance_agent_coverage() -> Dict[str, Any]:
 
     return coverage
 
+async def run_standalone_compliance_verification(
+    accounts_data: Union[pd.DataFrame, List[Dict], str],
+    user_id: str = "standalone_user",
+    verification_config: Dict = None
+) -> Dict:
+    """Run standalone compliance verification without workflow orchestration"""
 
-# ===== MAIN EXECUTION =====
+    try:
+        # Handle different input types
+        if isinstance(accounts_data, str):
+            # Assume it's a CSV file path
+            accounts_df = pd.read_csv(accounts_data)
+        elif isinstance(accounts_data, list):
+            # Convert list of dicts to DataFrame
+            accounts_df = pd.DataFrame(accounts_data)
+        elif isinstance(accounts_data, pd.DataFrame):
+            accounts_df = accounts_data.copy()
+        else:
+            raise ValueError("Invalid accounts_data type. Expected DataFrame, list of dicts, or CSV file path")
 
-if __name__ == "__main__":
-    # Demo usage
-    import sys
+        if accounts_df.empty:
+            raise ValueError("No account data provided for compliance verification")
 
-    print("CBUAE Compliance Analyzer Agents System")
-    print("=" * 50)
+        # Create orchestrator
+        orchestrator = ComplianceVerificationOrchestrator()
+
+        # Run verification
+        results = await orchestrator.orchestrate_compliance_verification(
+            user_id=user_id,
+            input_dataframe=accounts_df,
+            verification_config=verification_config or {}
+        )
+
+        return results
+
+    except Exception as e:
+        logger.error(f"Standalone compliance verification failed: {str(e)}")
+        return {
+            "success": False,
+            "error": str(e),
+            "verification_type": "standalone_compliance_verification"
+        }
+
+def generate_compliance_report(compliance_results: Dict) -> str:
+    """Generate a comprehensive compliance report in markdown format"""
+
+    if not compliance_results or compliance_results.get("success") == False:
+        return "# Compliance Verification Report\n\n**Status:** Failed\n\n**Error:** " + \
+               compliance_results.get("error", "Unknown error")
+
+    verification_summary = compliance_results.get("verification_summary", {})
+    compliance_summary = verification_summary.get("compliance_summary", {})
+    action_plan = compliance_results.get("action_plan", {})
+
+    report = []
+    report.append("# CBUAE Compliance Verification Report")
+    report.append("")
+
+    # Executive Summary
+    report.append("## Executive Summary")
+    report.append("")
+    report.append(f"**Verification Date:** {compliance_results.get('completion_timestamp', 'N/A')}")
+    report.append(f"**Total Accounts Verified:** {compliance_summary.get('total_accounts_verified', 0):,}")
+    report.append(f"**Total Violations Found:** {compliance_summary.get('total_violations_found', 0):,}")
+    report.append(f"**Total Actions Generated:** {compliance_summary.get('total_actions_generated', 0):,}")
+    report.append(f"**Overall Compliance Rate:** {compliance_summary.get('overall_compliance_rate', 0):.1f}%")
+    report.append(f"**Risk Assessment:** {compliance_summary.get('risk_assessment', 'Unknown')}")
+    report.append("")
+
+    # CBUAE Articles Coverage
+    total_articles = compliance_results.get("total_cbuae_articles_covered", 0)
+    report.append("## CBUAE Regulation Coverage")
+    report.append("")
+    report.append(f"**Total CBUAE Articles Covered:** {total_articles}")
+    report.append("**Articles Analyzed:**")
+    for article in ["Art. 2.1.1", "Art. 3.1", "Art. 3.4", "Art. 3.9", "Art. 3.10", "Art. 7.3", "Art. 8", "Art. 8.5"]:
+        report.append(f"- {article}")
+    report.append("")
+
+    # Category Breakdown
+    category_breakdown = verification_summary.get("category_breakdown", {})
+    if category_breakdown:
+        report.append("## Compliance by Category")
+        report.append("")
+        report.append("| Category | Agents | Violations | Actions | Avg Compliance Rate |")
+        report.append("|----------|--------|------------|---------|---------------------|")
+        for category, stats in category_breakdown.items():
+            compliance_rate = stats.get('avg_compliance_rate', 0)
+            report.append(f"| {category} | {stats['agents']} | {stats['violations']} | {stats['actions']} | {compliance_rate:.1f}% |")
+        report.append("")
+
+    # Priority Breakdown
+    priority_breakdown = verification_summary.get("priority_breakdown", {})
+    if priority_breakdown:
+        report.append("## Actions by Priority")
+        report.append("")
+        report.append("| Priority | Count | Percentage |")
+        report.append("|----------|-------|------------|")
+        total_actions = sum(priority_breakdown.values())
+        for priority, count in priority_breakdown.items():
+            percentage = (count / total_actions * 100) if total_actions > 0 else 0
+            report.append(f"| {priority} | {count} | {percentage:.1f}% |")
+        report.append("")
+
+    # Action Plan Timeline
+    if action_plan and 'execution_timeline' in action_plan:
+        timeline = action_plan['execution_timeline']
+        report.append("## Action Plan Timeline")
+        report.append("")
+        report.append(f"**Immediate Actions (≤1 day):** {timeline.get('immediate_actions', 0)}")
+        report.append(f"**Urgent Actions (≤7 days):** {timeline.get('urgent_actions', 0)}")
+        report.append(f"**Short-term Actions (≤30 days):** {timeline.get('short_term_actions', 0)}")
+        report.append(f"**Long-term Actions (>30 days):** {timeline.get('long_term_actions', 0)}")
+        report.append("")
+
+    # Resource Requirements
+    if action_plan and 'resource_requirements' in action_plan:
+        resources = action_plan['resource_requirements']
+        report.append("## Resource Requirements")
+        report.append("")
+        report.append(f"**Compliance Officers Needed:** {resources.get('compliance_officers', 0)}")
+        report.append(f"**Estimated Total Hours:** {resources.get('estimated_total_hours', 0):.1f}")
+        report.append(f"**Critical Actions:** {resources.get('critical_actions', 0)}")
+        report.append(f"**System Updates Required:** {resources.get('system_updates_required', 0)}")
+        report.append(f"**Customer Contact Required:** {resources.get('customer_contact_required', 0)}")
+        report.append("")
+
+    # Agent Performance
+    agent_results = verification_summary.get("agent_results", {})
+    if agent_results:
+        report.append("## Agent Performance Summary")
+        report.append("")
+        report.append("| Agent | Article | Violations | Actions | Compliance Rate | Risk Level |")
+        report.append("|-------|---------|------------|---------|-----------------|------------|")
+        for agent_name, result in agent_results.items():
+            compliance_rate = result.get('compliance_rate', 0)
+            report.append(f"| {agent_name} | {result.get('cbuae_article', 'N/A')} | {result.get('violations_found', 0)} | {result.get('actions_generated', 0)} | {compliance_rate:.1f}% | {result.get('risk_level', 'N/A')} |")
+        report.append("")
+
+    # Recommendations
+    report.append("## Key Recommendations")
+    report.append("")
+
+    # Collect recommendations from all agents
+    all_recommendations = set()
+    for agent_name, result in agent_results.items():
+        recommendations = result.get('recommendations', [])
+        all_recommendations.update(recommendations)
+
+    if all_recommendations:
+        for i, recommendation in enumerate(sorted(all_recommendations), 1):
+            report.append(f"{i}. {recommendation}")
+    else:
+        report.append("No specific recommendations generated.")
+
+    report.append("")
+
+    # Footer
+    report.append("---")
+    report.append("")
+    report.append("*This report was generated by the CBUAE Compliance Verification Agent System*")
+    report.append("")
+
+    return "\n".join(report)
+
+# ===== MOCK DATA GENERATOR FOR TESTING =====
+
+def generate_sample_dormant_accounts_data(num_accounts: int = 100) -> pd.DataFrame:
+    """Generate sample dormant accounts data for testing compliance verification"""
+
+    np.random.seed(42)  # For reproducible results
+
+    account_types = ['SAVINGS', 'CURRENT', 'FIXED_DEPOSIT', 'INVESTMENT']
+    currencies = ['AED', 'USD', 'EUR', 'GBP', 'SAR']
+    dormancy_statuses = ['DORMANT', 'ACTIVE', 'INACTIVE', None]
+    statement_frequencies = ['MONTHLY', 'QUARTERLY', 'SUPPRESSED', 'ANNUALLY']
+
+    data = []
+
+    for i in range(num_accounts):
+        account_id = f"ACC{i+1:06d}"
+        customer_id = f"CUST{i+1:06d}"
+
+        # Generate dormancy period (months)
+        dormancy_period = np.random.choice([
+            np.random.randint(0, 36),      # 30% not yet dormant
+            np.random.randint(36, 48),     # 25% newly dormant
+            np.random.randint(48, 60),     # 25% mid-stage dormant
+            np.random.randint(60, 120)     # 20% long-term dormant
+        ], p=[0.3, 0.25, 0.25, 0.2])
+
+        # Generate realistic balance
+        balance = max(0, np.random.lognormal(7, 2))  # Log-normal distribution
+
+        # Generate contact attempts based on dormancy period
+        if dormancy_period >= 36:
+            contact_attempts = np.random.randint(0, 5)
+        else:
+            contact_attempts = np.random.randint(0, 2)
+
+        # Generate dates
+        last_transaction_date = datetime.now() - timedelta(days=dormancy_period * 30)
+        last_contact_date = None
+        if contact_attempts > 0:
+            last_contact_date = (datetime.now() - timedelta(days=np.random.randint(1, dormancy_period * 30))).strftime('%Y-%m-%d')
+
+        # Generate other fields
+        dormancy_status = np.random.choice(dormancy_statuses, p=[0.7, 0.1, 0.1, 0.1])
+        currency = np.random.choice(currencies, p=[0.6, 0.15, 0.1, 0.1, 0.05])
+        address_known = np.random.choice(['Yes', 'No'], p=[0.7, 0.3])
+
+        account_data = {
+            'customer_id': customer_id,
+            'account_id': account_id,
+            'account_type': np.random.choice(account_types),
+            'account_status': 'ACTIVE' if dormancy_period < 36 else 'DORMANT',
+            'balance_current': round(balance, 2),
+            'last_transaction_date': last_transaction_date.strftime('%Y-%m-%d'),
+            'dormancy_status': dormancy_status,
+            'dormancy_period_months': dormancy_period,
+            'contact_attempts_made': contact_attempts,
+            'last_contact_date': last_contact_date,
+            'last_contact_attempt_date': last_contact_date,
+            'current_stage': 'DORMANT' if dormancy_period >= 36 else 'ACTIVE',
+            'waiting_period_end': (datetime.now() + timedelta(days=90)).strftime('%Y-%m-%d'),
+            'transferred_to_ledger_date': None,
+            'transferred_to_cb_date': None,
+            'transfer_eligibility_date': (datetime.now() + timedelta(days=365)).strftime('%Y-%m-%d'),
+            'statement_frequency': np.random.choice(statement_frequencies),
+            'currency': currency,
+            'address_known': address_known,
+            'maturity_date': None,
+            'auto_renewal': 'No'
+        }
+
+        data.append(account_data)
+
+    return pd.DataFrame(data)
+
+# ===== MAIN EXECUTION AND TESTING =====
+
+async def main():
+    """Main function for testing compliance verification"""
+
+    print("CBUAE Compliance Verification Agent System")
+    print("=" * 60)
 
     # Show agent coverage
     coverage = get_compliance_agent_coverage()
-    print(f"Total Agents: {coverage['total_agents']}")
+    print(f"Total Compliance Agents: {coverage['total_agents']}")
     print(f"Categories: {list(coverage['categories'].keys())}")
     print(f"CBUAE Articles Covered: {coverage['total_articles_covered']}")
     print()
@@ -1419,67 +1840,64 @@ if __name__ == "__main__":
         print(f"  {category}: {count} agents")
     print()
 
-    # Create sample dormant accounts data for testing
-    sample_data = pd.DataFrame({
-        'account_id': ['ACC001', 'ACC002', 'ACC003', 'ACC004', 'ACC005'],
-        'dormancy_period_months': [40, 45, 38, 65, 42],
-        'balance_current': [1500.0, 25000.0, 500.0, 12000.0, 3000.0],
-        'currency': ['AED', 'USD', 'AED', 'EUR', 'AED'],
-        'contact_attempts_made': [1, 0, 3, 2, 1],
-        'last_contact_date': [None, None, '2023-01-15', None, '2022-12-10'],
-        'dormancy_status': ['ACTIVE', None, 'DORMANT', 'ACTIVE', None],
-        'statement_frequency': ['MONTHLY', 'QUARTERLY', 'SUPPRESSED', 'MONTHLY', 'QUARTERLY'],
-        'address_known': ['Yes', 'No', 'Yes', 'No', 'Yes'],
-        'transferred_to_cb_date': [None, None, None, None, None],
-        'transferred_to_ledger_date': [None, None, None, None, None],
-        'box_id': [None, None, None, 'BOX123', None],
-        'outstanding_charges': [0, 0, 0, 500, 0],
-        'reclaim_status': [None, 'PENDING', None, None, 'PROCESSING'],
-        'reclaim_date': [None, '2024-01-15', None, None, '2024-02-01'],
-        'instrument_type': [None, None, 'BANKERS_CHEQUE', None, None],
-        'unclaimed_since': [None, None, '2023-06-01', None, None],
-        'amount': [0, 0, 1000, 0, 0],
-        'dormancy_trigger_date': ['2021-01-01', None, '2020-12-01', '2019-06-01', '2021-03-01']
-    })
+    # Generate sample data
+    print("Generating sample dormant accounts data...")
+    sample_accounts = generate_sample_dormant_accounts_data(50)
+    print(f"Generated {len(sample_accounts)} sample accounts")
+    print()
 
-    print("Running compliance analysis on sample dormant accounts...")
+    # Run comprehensive compliance verification
+    print("Running comprehensive compliance verification...")
+    verification_results = await run_standalone_compliance_verification(
+        accounts_data=sample_accounts,
+        user_id="test_user",
+        verification_config={
+            "include_recommendations": True,
+            "detailed_analysis": True
+        }
+    )
 
-    # Run compliance analysis
-    results = run_compliance_analysis_on_dormant_accounts(sample_data)
+    if verification_results and not verification_results.get("success") == False:
+        print("Compliance Verification Results:")
+        print("-" * 40)
 
-    if results['success']:
-        print(f"\nCompliance Analysis Results:")
-        print(f"  Dormant Accounts Processed: {results['dormant_accounts_processed']}")
-        print(f"  Total Violations Found: {results['summary_stats']['total_violations_found']}")
-        print(f"  Total Actions Generated: {results['summary_stats']['total_actions_generated']}")
-        print(f"  Compliance Rate: {results['summary_stats']['compliance_rate']:.1f}%")
-        print(f"  Processing Time: {results['summary_stats']['total_processing_time']:.2f} seconds")
+        verification_summary = verification_results.get("verification_summary", {})
+        compliance_summary = verification_summary.get("compliance_summary", {})
 
-        print(f"\nPriority Breakdown:")
-        for priority, count in results['priority_breakdown'].items():
-            print(f"  {priority}: {count} actions")
+        print(f"Total Accounts Verified: {compliance_summary.get('total_accounts_verified', 0):,}")
+        print(f"Total Violations Found: {compliance_summary.get('total_violations_found', 0):,}")
+        print(f"Total Actions Generated: {compliance_summary.get('total_actions_generated', 0):,}")
+        print(f"Overall Compliance Rate: {compliance_summary.get('overall_compliance_rate', 0):.1f}%")
+        print(f"Risk Assessment: {compliance_summary.get('risk_assessment', 'Unknown')}")
+        print()
 
-        print(f"\nCategory Breakdown:")
-        for category, stats in results['category_breakdown'].items():
-            print(
-                f"  {category}: {stats['agents']} agents, {stats['violations']} violations, {stats['actions']} actions")
+        # Priority breakdown
+        priority_breakdown = verification_summary.get("priority_breakdown", {})
+        print("Actions by Priority:")
+        for priority, count in priority_breakdown.items():
+            print(f"  {priority}: {count}")
+        print()
 
-        if 'action_plan' in results:
-            action_plan = results['action_plan']
-            print(f"\nAction Plan Timeline:")
-            timeline = action_plan['execution_timeline']
-            print(f"  Immediate (≤1 day): {timeline['immediate_actions']} actions")
-            print(f"  Urgent (≤7 days): {timeline['urgent_actions']} actions")
-            print(f"  Short-term (≤30 days): {timeline['short_term_actions']} actions")
-            print(f"  Long-term (>30 days): {timeline['long_term_actions']} actions")
+        # Generate and display report
+        print("Generating comprehensive compliance report...")
+        report = generate_compliance_report(verification_results)
 
-        if results['errors']:
-            print(f"\nErrors Encountered:")
-            for error in results['errors']:
-                print(f"  {error['agent']}: {error['error']}")
+        # Save report to file
+        with open("compliance_verification_report.md", "w") as f:
+            f.write(report)
+        print("Report saved to: compliance_verification_report.md")
+        print()
+
+        # Export actions to CSV
+        csv_output = export_compliance_actions_to_csv(verification_results, "compliance_actions.csv")
+        print(f"Actions exported: {csv_output}")
+
     else:
-        print("Compliance analysis failed!")
-        for error in results['errors']:
-            print(f"  Error: {error}")
+        print("Compliance verification failed!")
+        print(f"Error: {verification_results.get('error', 'Unknown error')}")
 
-    print("\nCompliance analysis completed.")
+    print("\nCompliance verification completed.")
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())
