@@ -1,2176 +1,1616 @@
 """
-app.py - Banking Compliance Agentic AI System Streamlit Application
-Comprehensive Streamlit web application integrating all agents and features
-Enhanced with LangGraph workflows, hybrid memory, and MCP tools
+Banking Compliance Analysis - Streamlit Application
+Fixed version with proper agent import handling and code structure
 """
 
-import asyncio
-import json
-import logging
-import os
-import secrets
-import tempfile
-import traceback
-from datetime import datetime, timedelta
-from typing import Dict, List, Any, Optional, Union
-from pathlib import Path
+# Configure Streamlit page FIRST - before any other Streamlit commands
+import streamlit as st
+
+st.set_page_config(
+    page_title="Banking Compliance Analysis System",
+    page_icon="🏦",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Now import other libraries
 import pandas as pd
 import numpy as np
+import asyncio
+import json
+import io
+import time
+from datetime import datetime, timedelta
+from typing import Dict, List, Any, Optional
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import streamlit as st
-from streamlit_option_menu import option_menu
-import extra_streamlit_components as stx
+import warnings
 
-# Core system imports
-try:
-    from core.workflow_engine import WorkflowOrchestrationEngine, WorkflowState, WorkflowStatus
-    from agents.memory_agent import HybridMemoryAgent, MemoryContext, MemoryBucket, MemoryPriority
-    from agents.Data_Process import DataProcessingAgent, DataProcessingState
-    from agents.Dormant_agent import DormancyAnalysisAgent, run_comprehensive_dormancy_analysis_csv
-    from agents.compliance_verification_agent import (
-        ComplianceVerificationAgent,
-        run_standalone_compliance_verification,
-        generate_compliance_report,
-        get_compliance_agent_coverage
-    )
-    from agents.data_mapping_agent import DataMappingAgent
-    from agents.notification_agent import NotificationAgent
-    from agents.reporting_agent import ReportingAgent
-    from agents.risk_assessment_agent import RiskAssessmentAgent
-    from agents.supervisor_agent import SupervisorAgent
-    from agents.error_handler_agent import ErrorHandlerAgent
-    from agents.audit_trail_agent import AuditTrailAgent
-    from mcp_client import MCPClient, create_mcp_client
-except ImportError as e:
-    st.error(f"Failed to import core modules: {e}")
-    st.info("Running in demo mode with mock data")
+warnings.filterwarnings('ignore')
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+import logging
+
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ========================= STREAMLIT CONFIGURATION =========================
+# Safe agent imports with fallbacks
+AGENTS_AVAILABLE = False
+DEMO_MODE = True
 
-st.set_page_config(
-    page_title="Banking Compliance AI",
-    page_icon="🏦",
-    layout="wide",
-    initial_sidebar_state="expanded",
-    menu_items={
-        'Get Help': 'https://github.com/your-repo/banking-compliance-ai',
-        'Report a bug': 'https://github.com/your-repo/banking-compliance-ai/issues',
-        'About': """
-        # Banking Compliance Agentic AI System
-        
-        A comprehensive AI-powered system for banking compliance analysis, 
-        dormancy detection, and regulatory reporting.
-        
-        **Features:**
-        - Multi-agent AI workflow orchestration
-        - CBUAE compliance verification
-        - Automated dormancy analysis
-        - Risk assessment and reporting
-        - Real-time notifications
-        """
-    }
-)
+try:
+    # Try importing data processing agents
+    from agents.data_upload_agent import DataUploadAgent, run_data_upload_process
+    from agents.Data_Process import DataProcessingAgent, run_data_quality_analysis
+    from agents.data_mapping_agent import DataMappingAgent, run_automated_data_mapping
 
-# Custom CSS
+    DATA_AGENTS_AVAILABLE = True
+    logger.info("✅ Data processing agents imported successfully")
+except ImportError as e:
+    DATA_AGENTS_AVAILABLE = False
+    logger.warning(f"⚠️ Data processing agents not available: {e}")
+
+try:
+    # Try importing dormancy agents
+    from agents.Dormant_agent import (
+        DormancyAnalysisAgent, run_comprehensive_dormancy_analysis_csv,
+        DemandDepositDormancyAgent, FixedDepositDormancyAgent,
+        InvestmentAccountDormancyAgent, PaymentInstrumentsDormancyAgent,
+        SafeDepositDormancyAgent, ContactAttemptsAgent, CBTransferEligibilityAgent,
+        Art3ProcessNeededAgent, HighValueDormantAccountsAgent,
+        DormantToActiveTransitionsAgent, RunAllDormantIdentificationChecksAgent
+    )
+
+    DORMANCY_AGENTS_AVAILABLE = True
+    logger.info("✅ Dormancy agents imported successfully")
+except ImportError as e:
+    DORMANCY_AGENTS_AVAILABLE = False
+    logger.warning(f"⚠️ Dormancy agents not available: {e}")
+
+try:
+    # Try importing compliance agents
+    from agents.compliance_verification_agent import (
+        ComplianceWorkflowOrchestrator, run_comprehensive_compliance_analysis_csv,
+        DetectIncompleteContactAttemptsAgent, DetectUnflaggedDormantCandidatesAgent,
+        DetectInternalLedgerCandidatesAgent, DetectStatementFreezeCandidatesAgent,
+        DetectCBUAETransferCandidatesAgent, DetectForeignCurrencyConversionNeededAgent,
+        DetectSDBCourtApplicationNeededAgent, DetectUnclaimedPaymentInstrumentsLedgerAgent,
+        DetectClaimProcessingPendingAgent, GenerateAnnualCBUAEReportSummaryAgent,
+        CheckRecordRetentionComplianceAgent, LogFlagInstructionsAgent,
+        RunAllComplianceChecksAgent
+    )
+
+    COMPLIANCE_AGENTS_AVAILABLE = True
+    logger.info("✅ Compliance agents imported successfully")
+except ImportError as e:
+    COMPLIANCE_AGENTS_AVAILABLE = False
+    logger.warning(f"⚠️ Compliance agents not available: {e}")
+
+# Set overall agent availability
+AGENTS_AVAILABLE = DATA_AGENTS_AVAILABLE and DORMANCY_AGENTS_AVAILABLE and COMPLIANCE_AGENTS_AVAILABLE
+
+if not AGENTS_AVAILABLE:
+    DEMO_MODE = True
+    logger.info("🧪 Running in demo mode with mock agents")
+
+# Custom CSS for better styling
 st.markdown("""
 <style>
     .main-header {
         font-size: 2.5rem;
-        font-weight: 700;
+        font-weight: bold;
         color: #1f4e79;
         text-align: center;
+        padding: 1rem 0;
+        border-bottom: 3px solid #1f4e79;
         margin-bottom: 2rem;
-        padding: 1rem;
-        background: linear-gradient(90deg, #f0f8ff, #e6f3ff);
-        border-radius: 10px;
-        border-left: 5px solid #1f4e79;
     }
-    
-    .metric-card {
-        background: white;
-        padding: 1rem;
-        border-radius: 10px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        border-left: 4px solid #1f4e79;
-        margin: 0.5rem 0;
-    }
-    
-    .status-success {
-        color: #28a745;
-        font-weight: bold;
-    }
-    
-    .status-warning {
-        color: #ffc107;
-        font-weight: bold;
-    }
-    
-    .status-error {
-        color: #dc3545;
-        font-weight: bold;
-    }
-    
+
     .agent-card {
         background: #f8f9fa;
         padding: 1rem;
-        border-radius: 8px;
+        border-radius: 10px;
+        border-left: 4px solid #1f4e79;
         margin: 0.5rem 0;
-        border: 1px solid #dee2e6;
     }
-    
-    .workflow-step {
-        display: flex;
-        align-items: center;
-        padding: 0.5rem;
-        margin: 0.25rem 0;
-        border-radius: 5px;
-        background: #f8f9fa;
+
+    .metric-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 1rem;
+        border-radius: 10px;
+        text-align: center;
+        margin: 0.5rem;
     }
-    
-    .step-completed {
-        background: #d4edda;
-        border-left: 4px solid #28a745;
+
+    .success-card {
+        background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+        color: white;
+        padding: 1rem;
+        border-radius: 10px;
+        margin: 0.5rem 0;
     }
-    
-    .step-running {
-        background: #fff3cd;
-        border-left: 4px solid #ffc107;
+
+    .warning-card {
+        background: linear-gradient(135deg, #ff9800 0%, #f57c00 100%);
+        color: white;
+        padding: 1rem;
+        border-radius: 10px;
+        margin: 0.5rem 0;
     }
-    
-    .step-failed {
-        background: #f8d7da;
-        border-left: 4px solid #dc3545;
+
+    .error-card {
+        background: linear-gradient(135deg, #f44336 0%, #d32f2f 100%);
+        color: white;
+        padding: 1rem;
+        border-radius: 10px;
+        margin: 0.5rem 0;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# ========================= GLOBAL STATE MANAGEMENT =========================
 
-@st.cache_resource
-def initialize_system():
-    """Initialize the core system components"""
+# ===== AUTHENTICATION SYSTEM =====
 
-    try:
-        logger.info("Initializing Banking Compliance Agentic AI System...")
-
-        # Initialize with mock client for demo
-        mcp_client = type('MockMCPClient', (), {
-            'is_mock_mode': lambda: True,
-            'call_tool': lambda self, tool_name, params=None: asyncio.run(mock_tool_call(tool_name, params)),
-            'get_statistics': lambda self: {'connected': True, 'mock_mode': True}
-        })()
-
-        # Initialize memory agent (mock mode)
-        memory_agent = type('MockMemoryAgent', (), {
-            'store_memory': lambda self, *args, **kwargs: {'success': True},
-            'retrieve_memory': lambda self, *args, **kwargs: {'success': True, 'data': []},
-            'get_memory_statistics': lambda self: {'total_entries': 0}
-        })()
-
-        # Initialize workflow engine (mock mode)
-        workflow_engine = type('MockWorkflowEngine', (), {
-            'execute_workflow': lambda self, user_id, data, options=None: asyncio.run(mock_workflow_execution(user_id, data, options))
-        })()
-
-        return {
-            'mcp_client': mcp_client,
-            'memory_agent': memory_agent,
-            'workflow_engine': workflow_engine,
-            'initialized': True,
-            'mode': 'demo'
-        }
-
-    except Exception as e:
-        logger.error(f"System initialization failed: {str(e)}")
-        return {
-            'initialized': False,
-            'error': str(e),
-            'mode': 'error'
-        }
-
-async def mock_tool_call(tool_name: str, params: Optional[Dict] = None):
-    """Mock tool call for demo purposes"""
-    await asyncio.sleep(0.1)  # Simulate processing
-
-    return {
-        'success': True,
-        'data': {'tool': tool_name, 'mock': True},
-        'timestamp': datetime.now().isoformat()
-    }
-
-async def mock_workflow_execution(user_id: str, data: Dict, options: Optional[Dict] = None):
-    """Mock workflow execution for demo purposes"""
-
-    # Simulate processing time
-    await asyncio.sleep(2)
-
-    # Generate mock results
-    total_accounts = len(data.get('accounts', []))
-    dormant_accounts = max(1, int(total_accounts * 0.23))  # 23% dormancy rate
-
-    return {
-        'success': True,
-        'workflow_id': secrets.token_hex(16),
-        'status': 'completed',
-        'total_processing_time': 2.1,
-        'nodes_completed': 8,
-        'nodes_failed': 0,
-        'errors': [],
-        'warnings': [],
-        'results': {
-            'data_processing': {
-                'status': 'completed',
-                'quality_score': 0.95,
-                'records_processed': total_accounts
-            },
-            'dormancy_analysis': {
-                'total_analyzed': total_accounts,
-                'dormant_found': dormant_accounts,
-                'high_risk': max(1, int(dormant_accounts * 0.15))
-            },
-            'compliance': {
-                'status': 'compliant',
-                'critical_violations': 0
-            },
-            'risk_assessment': {
-                'overall_score': 0.25
-            }
-        }
-    }
-
-# Initialize system
-if 'system' not in st.session_state:
-    st.session_state.system = initialize_system()
-
-# ========================= AUTHENTICATION =========================
-
-def init_auth():
-    """Initialize authentication state"""
+def check_authentication():
+    """Simple authentication system"""
     if 'authenticated' not in st.session_state:
         st.session_state.authenticated = False
-        st.session_state.user = None
-        st.session_state.user_role = None
 
-def login_form():
-    """Display login form"""
-    st.markdown('<div class="main-header">🏦 Banking Compliance AI System</div>', unsafe_allow_html=True)
+    if not st.session_state.authenticated:
+        show_login_page()
+        return False
+    return True
+
+
+def show_login_page():
+    """Display login page"""
+    st.markdown('<div class="main-header">🏦 Banking Compliance Analysis System</div>',
+                unsafe_allow_html=True)
+
+    st.markdown("### 🔐 Please Login to Continue")
 
     col1, col2, col3 = st.columns([1, 2, 1])
 
     with col2:
-        st.markdown("### 🔐 System Login")
-
         with st.form("login_form"):
+            st.markdown("#### Enter Your Credentials")
             username = st.text_input("Username", placeholder="Enter your username")
             password = st.text_input("Password", type="password", placeholder="Enter your password")
-            role = st.selectbox("Role", ["Compliance Analyst", "Risk Manager", "Supervisor", "Administrator"])
 
-            col1, col2 = st.columns(2)
-            with col1:
-                login_button = st.form_submit_button("🚀 Login", use_container_width=True)
-            with col2:
-                demo_button = st.form_submit_button("📊 Demo Mode", use_container_width=True)
-
-            if login_button:
-                if username and password:
-                    # Mock authentication - in production, this would validate against a database
+            if st.form_submit_button("🔓 Login", use_container_width=True):
+                # Simple authentication (in production, use proper authentication)
+                if username in ["admin", "analyst", "compliance"] and password == "banking123":
                     st.session_state.authenticated = True
-                    st.session_state.user = username
-                    st.session_state.user_role = role
-                    st.session_state.auth_mode = 'authenticated'
+                    st.session_state.username = username
+                    st.session_state.user_role = username
+                    st.success("✅ Login successful!")
                     st.rerun()
                 else:
-                    st.error("Please enter both username and password")
+                    st.error("❌ Invalid credentials. Try: admin/analyst/compliance with password 'banking123'")
 
-            if demo_button:
-                st.session_state.authenticated = True
-                st.session_state.user = "Demo User"
-                st.session_state.user_role = "Compliance Analyst"
-                st.session_state.auth_mode = 'demo'
-                st.rerun()
+    # Demo credentials info
+    st.markdown("---")
+    st.info("""
+    **Demo Credentials:**
+    - Username: `admin`, `analyst`, or `compliance`
+    - Password: `banking123`
+    """)
 
-        # System information
-        with st.expander("ℹ️ System Information"):
-            col1, col2 = st.columns(2)
-            with col1:
-                st.info("**Demo Credentials:**\n- Username: analyst\n- Password: demo123")
-            with col2:
-                system_status = "🟢 Online" if st.session_state.system.get('initialized') else "🔴 Offline"
-                st.info(f"**System Status:** {system_status}\n**Mode:** {st.session_state.system.get('mode', 'unknown')}")
 
-# ========================= MAIN APPLICATION =========================
+def logout():
+    """Logout function"""
+    for key in st.session_state.keys():
+        del st.session_state[key]
+    st.rerun()
 
-def main_app():
-    """Main application interface"""
 
-    # Sidebar navigation
+# ===== SIDEBAR NAVIGATION =====
+
+def show_sidebar():
+    """Display sidebar navigation"""
     with st.sidebar:
-        st.markdown(f"### 👤 Welcome, {st.session_state.user}")
-        st.markdown(f"**Role:** {st.session_state.user_role}")
+        st.markdown(f"### 👤 Welcome, {st.session_state.get('username', 'User')}")
+        st.markdown(f"**Role:** {st.session_state.get('user_role', 'Unknown').title()}")
+
+        if st.button("🚪 Logout", use_container_width=True):
+            logout()
+
+        st.markdown("---")
 
         # Navigation menu
-        selected = option_menu(
-            menu_title="Navigation",
-            options=[
-                "Dashboard",
-                "Data Upload",
-                "Data Mapping",
-                "Workflow Monitor",
-                "Compliance Reports",
-                "Risk Analysis",
-                "Notifications",
-                "System Admin"
-            ],
-            icons=[
-                "speedometer2",
-                "cloud-upload",
-                "diagram-3",
-                "gear",
-                "file-earmark-check",
-                "exclamation-triangle",
-                "bell",
-                "tools"
-            ],
-            menu_icon="bank",
-            default_index=0
+        page = st.selectbox(
+            "🧭 Navigate to:",
+            [
+                "📊 Dashboard",
+                "📁 Data Processing",
+                "💤 Dormancy Analysis",
+                "⚖️ Compliance Analysis",
+                "📋 Reports",
+                "⚙️ Settings"
+            ]
         )
 
-        # System status
         st.markdown("---")
+
+        # System status
         st.markdown("### 🔧 System Status")
 
-        system = st.session_state.system
-        if system.get('initialized'):
-            st.success("✅ System Online")
-            st.info(f"Mode: {system.get('mode', 'unknown').title()}")
+        # Show agent availability
+        if AGENTS_AVAILABLE:
+            st.success("🟢 All agents operational")
         else:
-            st.error("❌ System Offline")
-            st.error(f"Error: {system.get('error', 'Unknown')}")
+            st.warning("🟡 Running in demo mode")
 
-        # Quick stats
-        if 'workflow_stats' in st.session_state:
-            stats = st.session_state.workflow_stats
-            st.metric("Total Workflows", stats.get('total', 0))
-            st.metric("Success Rate", f"{stats.get('success_rate', 0):.1f}%")
+        if not DATA_AGENTS_AVAILABLE:
+            st.error("🔴 Data agents unavailable")
+        if not DORMANCY_AGENTS_AVAILABLE:
+            st.error("🔴 Dormancy agents unavailable")
+        if not COMPLIANCE_AGENTS_AVAILABLE:
+            st.error("🔴 Compliance agents unavailable")
 
-        # Logout button
-        st.markdown("---")
-        if st.button("🚪 Logout", use_container_width=True):
-            for key in list(st.session_state.keys()):
-                del st.session_state[key]
-            st.rerun()
+        st.info(f"🕒 Last updated: {datetime.now().strftime('%H:%M:%S')}")
 
-    # Main content area
-    if selected == "Dashboard":
-        show_dashboard()
-    elif selected == "Data Upload":
-        show_data_upload()
-    elif selected == "Data Mapping":
-        show_data_mapping()
-    elif selected == "Workflow Monitor":
-        show_workflow_monitor()
-    elif selected == "Compliance Reports":
-        show_compliance_reports()
-    elif selected == "Risk Analysis":
-        show_risk_analysis()
-    elif selected == "Notifications":
-        show_notifications()
-    elif selected == "System Admin":
-        show_system_admin()
+        return page
 
-# ========================= PAGE FUNCTIONS =========================
+
+# ===== INITIALIZE SESSION STATE =====
+
+def initialize_session_state():
+    """Initialize session state variables"""
+    if 'uploaded_data' not in st.session_state:
+        st.session_state.uploaded_data = None
+    if 'processed_data' not in st.session_state:
+        st.session_state.processed_data = None
+    if 'mapped_data' not in st.session_state:
+        st.session_state.mapped_data = None
+    if 'dormancy_results' not in st.session_state:
+        st.session_state.dormancy_results = {}
+    if 'compliance_results' not in st.session_state:
+        st.session_state.compliance_results = {}
+    if 'data_quality_results' not in st.session_state:
+        st.session_state.data_quality_results = None
+    if 'mapping_results' not in st.session_state:
+        st.session_state.mapping_results = None
+
+
+# ===== UTILITY FUNCTIONS =====
+
+def create_download_button(data, filename, label="📥 Download CSV"):
+    """Create download button for DataFrame"""
+    if isinstance(data, pd.DataFrame) and not data.empty:
+        csv_buffer = io.StringIO()
+        data.to_csv(csv_buffer, index=False)
+        csv_data = csv_buffer.getvalue()
+
+        return st.download_button(
+            label=label,
+            data=csv_data,
+            file_name=f"{filename}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
+    return None
+
+
+def format_number(num):
+    """Format number with commas"""
+    if pd.isna(num):
+        return "N/A"
+    return f"{num:,.0f}" if isinstance(num, (int, float)) else str(num)
+
+
+def create_metric_card(title, value, delta=None, delta_color="normal"):
+    """Create custom metric card"""
+    delta_html = ""
+    if delta:
+        color = "green" if delta_color == "normal" else "red"
+        delta_html = f'<small style="color: {color};">{delta}</small>'
+
+    st.markdown(f"""
+    <div class="metric-card">
+        <h3>{title}</h3>
+        <h2>{value}</h2>
+        {delta_html}
+    </div>
+    """, unsafe_allow_html=True)
+
+
+# ===== MOCK FUNCTIONS FOR DEMO MODE =====
+
+def generate_sample_data():
+    """Generate sample banking compliance data for demo"""
+    np.random.seed(42)
+    n_records = 1000
+
+    # Customer data
+    customer_ids = [f"CUS{100000 + i}" for i in range(n_records)]
+    account_ids = [f"ACC{200000 + i}" for i in range(n_records)]
+
+    # Account types
+    account_types = np.random.choice(
+        ['CURRENT', 'SAVINGS', 'FIXED_DEPOSIT', 'INVESTMENT'],
+        n_records, p=[0.4, 0.3, 0.2, 0.1]
+    )
+
+    # Account status
+    account_status = np.random.choice(
+        ['ACTIVE', 'DORMANT', 'CLOSED'],
+        n_records, p=[0.7, 0.25, 0.05]
+    )
+
+    # Dormancy status
+    dormancy_status = np.where(
+        account_status == 'DORMANT',
+        np.random.choice(['DORMANT', 'Potentially_Dormant'], n_records),
+        'Not_Dormant'
+    )
+
+    # Generate dates
+    base_date = datetime.now() - timedelta(days=1095)  # 3 years ago
+    last_transaction_dates = [
+        base_date + timedelta(days=np.random.randint(0, 1095))
+        for _ in range(n_records)
+    ]
+
+    # Generate balances
+    balances = np.random.lognormal(10, 1.5, n_records)  # Log-normal distribution
+
+    sample_data = pd.DataFrame({
+        'customer_id': customer_ids,
+        'account_id': account_ids,
+        'customer_type': np.random.choice(['INDIVIDUAL', 'CORPORATE'], n_records, p=[0.8, 0.2]),
+        'full_name_en': [f"Customer {i + 1}" for i in range(n_records)],
+        'account_type': account_types,
+        'account_status': account_status,
+        'dormancy_status': dormancy_status,
+        'last_transaction_date': [d.strftime('%Y-%m-%d') for d in last_transaction_dates],
+        'balance_current': np.round(balances, 2),
+        'currency': np.random.choice(['AED', 'USD', 'EUR'], n_records, p=[0.7, 0.2, 0.1]),
+        'contact_attempts_made': np.random.randint(0, 5, n_records),
+        'dormancy_period_months': np.where(
+            dormancy_status != 'Not_Dormant',
+            np.random.randint(6, 60, n_records),
+            0
+        ),
+        'current_stage': np.random.choice(
+            ['ACTIVE', 'CONTACT_ATTEMPTS', 'WAITING_PERIOD', 'READY_FOR_TRANSFER'],
+            n_records, p=[0.6, 0.2, 0.15, 0.05]
+        )
+    })
+
+    return sample_data
+
+
+def run_data_quality_analysis_sync(data):
+    """Mock data quality analysis"""
+    quality_score = np.random.randint(75, 95)
+
+    column_analysis = {}
+    for col in data.columns:
+        missing_pct = (data[col].isnull().sum() / len(data)) * 100
+        column_analysis[col] = {
+            'missing_percentage': missing_pct,
+            'data_type': str(data[col].dtype),
+            'unique_values': data[col].nunique(),
+            'sample_values': data[col].dropna().unique()[:5].tolist()
+        }
+
+    return {
+        'overall_quality_score': quality_score,
+        'total_records': len(data),
+        'total_columns': len(data.columns),
+        'missing_values_total': data.isnull().sum().sum(),
+        'column_analysis': column_analysis,
+        'recommendations': [
+            "Data quality is acceptable for analysis",
+            "Consider handling missing values in critical fields",
+            "Validate data types for numerical calculations"
+        ]
+    }
+
+
+def run_data_mapping_sync(data):
+    """Mock data mapping results"""
+    auto_mapping_pct = np.random.randint(85, 98)
+
+    field_mappings = []
+    for col in data.columns[:10]:  # Limit to first 10 columns for demo
+        confidence = np.random.uniform(0.7, 0.99)
+        field_mappings.append({
+            'source_field': col,
+            'target_field': col.lower().replace(' ', '_'),
+            'confidence_score': confidence,
+            'mapping_strategy': 'automatic' if confidence > 0.9 else 'manual_required'
+        })
+
+    return {
+        'auto_mapping_percentage': auto_mapping_pct,
+        'total_fields': len(data.columns),
+        'mapped_fields': len(field_mappings),
+        'field_mappings': field_mappings,
+        'transformation_ready': auto_mapping_pct >= 90,
+        'recommendations': [
+            f"Auto-mapping achieved {auto_mapping_pct}% success rate",
+            "Review low confidence mappings" if auto_mapping_pct < 90 else "Ready for transformation",
+            "Data mapping completed successfully"
+        ]
+    }
+
+
+def run_dormancy_analysis_sync(data, report_date):
+    """Mock dormancy analysis results"""
+    agents_info = {
+        "demand_deposit": {
+            "name": "Demand Deposit Dormancy",
+            "description": "Analyzes current and savings accounts for 3+ years inactivity (CBUAE Article 2.1.1)",
+            "article": "2.1.1",
+            "dormant_found": np.random.randint(10, 50),
+            "priority": "HIGH"
+        },
+        "fixed_deposit": {
+            "name": "Fixed Deposit Dormancy",
+            "description": "Analyzes term deposits based on maturity and renewal status (CBUAE Article 2.2)",
+            "article": "2.2",
+            "dormant_found": np.random.randint(5, 25),
+            "priority": "HIGH"
+        },
+        "investment": {
+            "name": "Investment Account Dormancy",
+            "description": "Analyzes investment accounts for inactivity patterns (CBUAE Article 2.3)",
+            "article": "2.3",
+            "dormant_found": np.random.randint(3, 15),
+            "priority": "MEDIUM"
+        },
+        "payment_instruments": {
+            "name": "Unclaimed Payment Instruments",
+            "description": "Identifies unclaimed cheques and drafts over 1 year (CBUAE Article 2.4)",
+            "article": "2.4",
+            "dormant_found": np.random.randint(2, 10),
+            "priority": "MEDIUM"
+        },
+        "safe_deposit": {
+            "name": "Safe Deposit Box Dormancy",
+            "description": "Analyzes SDB accounts with unpaid fees (CBUAE Article 2.6)",
+            "article": "2.6",
+            "dormant_found": np.random.randint(1, 8),
+            "priority": "LOW"
+        },
+        "contact_attempts": {
+            "name": "Contact Attempts Compliance",
+            "description": "Verifies compliance with contact attempt requirements (CBUAE Article 5)",
+            "article": "5",
+            "dormant_found": np.random.randint(15, 35),
+            "priority": "CRITICAL"
+        },
+        "cb_transfer": {
+            "name": "Central Bank Transfer Eligibility",
+            "description": "Identifies accounts eligible for CBUAE transfer (5+ years dormant)",
+            "article": "8.1",
+            "dormant_found": np.random.randint(5, 20),
+            "priority": "CRITICAL"
+        },
+        "high_value": {
+            "name": "High Value Dormant Accounts",
+            "description": "Identifies high-value dormant accounts requiring priority attention",
+            "article": "Internal",
+            "dormant_found": np.random.randint(3, 12),
+            "priority": "CRITICAL"
+        }
+    }
+
+    # Generate sample dormant account data for each agent
+    for agent_id, info in agents_info.items():
+        if info["dormant_found"] > 0:
+            sample_accounts = []
+            for i in range(info["dormant_found"]):
+                sample_accounts.append({
+                    'account_id': f"ACC{200000 + i}",
+                    'customer_id': f"CUS{100000 + i}",
+                    'account_type': np.random.choice(['CURRENT', 'SAVINGS', 'FIXED_DEPOSIT']),
+                    'balance_current': np.random.uniform(1000, 100000),
+                    'years_dormant': np.random.uniform(3.1, 7.5),
+                    'priority': info["priority"],
+                    'next_action': f"Review {agent_id} compliance"
+                })
+
+            info["sample_data"] = pd.DataFrame(sample_accounts)
+
+    return {
+        "analysis_date": report_date,
+        "total_accounts_analyzed": len(data),
+        "agents_results": agents_info,
+        "summary": {
+            "total_dormant_found": sum(info["dormant_found"] for info in agents_info.values()),
+            "critical_agents": len([a for a in agents_info.values() if a["priority"] == "CRITICAL"]),
+            "high_priority_agents": len([a for a in agents_info.values() if a["priority"] == "HIGH"])
+        }
+    }
+
+
+def run_compliance_analysis_sync(dormancy_results, processed_data):
+    """Mock compliance analysis results"""
+    compliance_agents = {
+        "incomplete_contact": {
+            "name": "Incomplete Contact Attempts",
+            "description": "Detects accounts with insufficient contact attempts per CBUAE requirements",
+            "category": "Contact & Communication",
+            "article": "3.1, 5",
+            "violations_found": np.random.randint(10, 30),
+            "priority": "CRITICAL"
+        },
+        "unflagged_dormant": {
+            "name": "Unflagged Dormant Candidates",
+            "description": "Identifies accounts that should be flagged as dormant but aren't",
+            "category": "Contact & Communication",
+            "article": "2",
+            "violations_found": np.random.randint(5, 20),
+            "priority": "HIGH"
+        },
+        "internal_ledger": {
+            "name": "Internal Ledger Transfer Candidates",
+            "description": "Identifies accounts ready for internal ledger transfer",
+            "category": "Process Management",
+            "article": "3.4, 3.5",
+            "violations_found": np.random.randint(8, 25),
+            "priority": "HIGH"
+        },
+        "statement_freeze": {
+            "name": "Statement Suppression Required",
+            "description": "Accounts requiring statement suppression per dormancy rules",
+            "category": "Process Management",
+            "article": "7.3",
+            "violations_found": np.random.randint(12, 35),
+            "priority": "MEDIUM"
+        },
+        "cbuae_transfer": {
+            "name": "CBUAE Transfer Candidates",
+            "description": "Accounts eligible for Central Bank transfer (5+ years dormant)",
+            "category": "Process Management",
+            "article": "8",
+            "violations_found": np.random.randint(3, 15),
+            "priority": "CRITICAL"
+        }
+    }
+
+    # Generate sample compliance actions for each agent with violations
+    for agent_id, info in compliance_agents.items():
+        if info["violations_found"] > 0:
+            actions = []
+            for i in range(info["violations_found"]):
+                actions.append({
+                    'account_id': f"ACC{300000 + i}",
+                    'action_type': f"{agent_id.upper()}_ACTION",
+                    'priority': info["priority"],
+                    'deadline_days': np.random.randint(1, 30),
+                    'description': f"Action required for {info['name'].lower()}",
+                    'estimated_hours': np.random.uniform(0.5, 4.0),
+                    'status': 'PENDING'
+                })
+
+            info["actions"] = pd.DataFrame(actions)
+
+    return {
+        "analysis_timestamp": datetime.now().isoformat(),
+        "total_agents_analyzed": len(compliance_agents),
+        "agents_with_violations": len([a for a in compliance_agents.values() if a["violations_found"] > 0]),
+        "total_violations": sum(info["violations_found"] for info in compliance_agents.values()),
+        "total_actions": sum(info["violations_found"] for info in compliance_agents.values()),
+        "compliance_agents": compliance_agents,
+        "summary": {
+            "critical_violations": len(
+                [a for a in compliance_agents.values() if a["priority"] == "CRITICAL" and a["violations_found"] > 0]),
+            "high_priority_violations": len(
+                [a for a in compliance_agents.values() if a["priority"] == "HIGH" and a["violations_found"] > 0]),
+            "categories_affected": len(
+                set(a["category"] for a in compliance_agents.values() if a["violations_found"] > 0))
+        }
+    }
+
+
+# ===== PAGE FUNCTIONS =====
 
 def show_dashboard():
-    """Display main dashboard"""
-
+    """Display main dashboard with key metrics and overview"""
     st.markdown('<div class="main-header">📊 Banking Compliance Dashboard</div>', unsafe_allow_html=True)
+
+    # Welcome message
+    st.markdown(f"### Welcome back, {st.session_state.get('username', 'User')}!")
+    st.markdown("Monitor your banking compliance status and dormancy analysis progress.")
 
     # Key metrics row
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        st.metric(
-            label="📈 Total Accounts Analyzed",
-            value="12,847",
-            delta="342 this week"
-        )
+        total_records = len(st.session_state.processed_data) if st.session_state.processed_data is not None else 0
+        create_metric_card("Total Records", format_number(total_records))
 
     with col2:
-        st.metric(
-            label="⚠️ Dormant Accounts",
-            value="2,954",
-            delta="-23 from last month",
-            delta_color="inverse"
-        )
+        dormant_found = 0
+        if st.session_state.dormancy_results:
+            dormant_found = st.session_state.dormancy_results.get('summary', {}).get('total_dormant_found', 0)
+        create_metric_card("Dormant Accounts", format_number(dormant_found))
 
     with col3:
-        st.metric(
-            label="🎯 Compliance Score",
-            value="94.7%",
-            delta="2.1% improvement"
-        )
+        compliance_score = "N/A"
+        if st.session_state.compliance_results:
+            total_violations = st.session_state.compliance_results.get('total_violations', 0)
+            compliance_score = f"{max(0, 100 - total_violations)}%" if total_violations < 100 else "Review Required"
+        create_metric_card("Compliance Score", compliance_score)
 
     with col4:
-        st.metric(
-            label="🔍 Risk Level",
-            value="Medium",
-            delta="Stable"
-        )
+        pending_actions = 0
+        if st.session_state.compliance_results:
+            pending_actions = st.session_state.compliance_results.get('total_actions', 0)
+        create_metric_card("Pending Actions", format_number(pending_actions))
 
     st.markdown("---")
 
-    # Charts row
-    col1, col2 = st.columns(2)
+    # Quick actions section
+    st.markdown("### 🚀 Quick Actions")
+
+    col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        st.subheader("📊 Dormancy Trends")
-
-        # Generate sample trend data
-        dates = pd.date_range(start='2024-01-01', end='2024-12-01', freq='M')
-        dormancy_data = pd.DataFrame({
-            'Date': dates,
-            'Dormant_Accounts': np.random.randint(2800, 3200, len(dates)),
-            'New_Dormant': np.random.randint(50, 150, len(dates)),
-            'Reactivated': np.random.randint(30, 100, len(dates))
-        })
-
-        fig = px.line(dormancy_data, x='Date', y=['Dormant_Accounts', 'New_Dormant', 'Reactivated'],
-                     title="Dormancy Trends Over Time")
-        fig.update_layout(height=400)
-        st.plotly_chart(fig, use_container_width=True)
+        if st.button("📁 Process New Data", use_container_width=True):
+            # Since we can't modify session state for page navigation directly, 
+            # we'll show an info message
+            st.info("Navigate to 'Data Processing' from the sidebar")
 
     with col2:
-        st.subheader("🏛️ CBUAE Compliance Breakdown")
+        if st.button("💤 Run Dormancy Analysis", use_container_width=True):
+            st.info("Navigate to 'Dormancy Analysis' from the sidebar")
 
-        # Compliance by article
-        compliance_data = pd.DataFrame({
-            'Article': ['Art. 2.1.1', 'Art. 2.2', 'Art. 2.3', 'Art. 3.1', 'Art. 8.1'],
-            'Compliance_Rate': [96.5, 94.2, 98.1, 92.8, 89.3],
-            'Issues': [12, 23, 7, 34, 45]
-        })
+    with col3:
+        if st.button("⚖️ Check Compliance", use_container_width=True):
+            st.info("Navigate to 'Compliance Analysis' from the sidebar")
 
-        fig = px.bar(compliance_data, x='Article', y='Compliance_Rate',
-                    title="Compliance Rate by CBUAE Article",
-                    color='Compliance_Rate',
-                    color_continuous_scale='RdYlGn')
-        fig.update_layout(height=400)
-        st.plotly_chart(fig, use_container_width=True)
+    with col4:
+        if st.button("📋 Generate Reports", use_container_width=True):
+            st.info("Navigate to 'Reports' from the sidebar")
 
-    # Recent activity and alerts
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.subheader("🔔 Recent Alerts")
-
-        alerts = [
-            {"time": "2 hours ago", "type": "High Value", "message": "High-value dormant account detected (AED 125,000)", "severity": "warning"},
-            {"time": "5 hours ago", "type": "Compliance", "message": "Article 3.1 contact attempt overdue", "severity": "error"},
-            {"time": "1 day ago", "type": "System", "message": "Monthly compliance report generated", "severity": "info"},
-            {"time": "2 days ago", "type": "Risk", "message": "Risk score increased for retail portfolio", "severity": "warning"}
-        ]
-
-        for alert in alerts:
-            if alert["severity"] == "error":
-                st.error(f"🚨 **{alert['type']}** ({alert['time']})\n{alert['message']}")
-            elif alert["severity"] == "warning":
-                st.warning(f"⚠️ **{alert['type']}** ({alert['time']})\n{alert['message']}")
-            else:
-                st.info(f"ℹ️ **{alert['type']}** ({alert['time']})\n{alert['message']}")
-
-    with col2:
-        st.subheader("⚡ Quick Actions")
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            if st.button("📁 Upload New Data", use_container_width=True):
-                st.session_state.nav_override = "Data Upload"
-                st.rerun()
-
-            if st.button("🔍 Run Analysis", use_container_width=True):
-                st.session_state.nav_override = "Workflow Monitor"
-                st.rerun()
-
-        with col2:
-            if st.button("📋 Generate Report", use_container_width=True):
-                st.session_state.nav_override = "Compliance Reports"
-                st.rerun()
-
-            if st.button("⚙️ System Status", use_container_width=True):
-                st.session_state.nav_override = "System Admin"
-                st.rerun()
-
-        st.markdown("---")
-
-        # System health indicators
-        st.markdown("**🏥 System Health**")
-
-        health_metrics = [
-            ("Memory Agent", "🟢", "Healthy"),
-            ("MCP Client", "🟢", "Connected"),
-            ("Workflow Engine", "🟢", "Running"),
-            ("Database", "🟢", "Online")
-        ]
-
-        for metric, status, description in health_metrics:
-            st.markdown(f"{status} **{metric}**: {description}")
-
-def show_data_upload():
-    """Display data upload interface"""
-
-    st.markdown('<div class="main-header">📁 Data Upload & Processing</div>', unsafe_allow_html=True)
-
-    # File upload section
-    st.subheader("📂 Upload Banking Data")
-
-    uploaded_file = st.file_uploader(
-        "Choose a file",
-        type=['csv', 'xlsx', 'xls'],
-        help="Upload CSV or Excel files containing banking compliance data"
-    )
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        analysis_type = st.selectbox(
-            "Analysis Type",
-            options=[
-                "comprehensive",
-                "dormancy_only",
-                "compliance_only",
-                "risk_only"
-            ],
-            format_func=lambda x: {
-                "comprehensive": "🔍 Comprehensive Analysis",
-                "dormancy_only": "😴 Dormancy Analysis Only",
-                "compliance_only": "✅ Compliance Verification Only",
-                "risk_only": "⚠️ Risk Assessment Only"
-            }[x]
-        )
-
-    with col2:
-        report_date = st.date_input(
-            "Report Date",
-            value=datetime.now().date(),
-            help="Date for the analysis report"
-        )
-
-    # Advanced options
-    with st.expander("🔧 Advanced Options"):
-        col1, col2 = st.columns(2)
-
-        with col1:
-            include_notifications = st.checkbox("📧 Send Notifications", value=True)
-            auto_mapping = st.checkbox("🔗 Auto Data Mapping", value=True)
-            quality_checks = st.checkbox("✅ Enhanced Quality Checks", value=True)
-
-        with col2:
-            confidence_threshold = st.slider("Mapping Confidence Threshold", 0.5, 1.0, 0.8)
-            max_processing_time = st.number_input("Max Processing Time (minutes)", 1, 60, 15)
-            priority_level = st.selectbox("Priority Level", ["Low", "Medium", "High"], index=1)
-
-    if uploaded_file is not None:
-        # Display file information
-        st.success(f"✅ File uploaded: {uploaded_file.name}")
-
-        # File preview
-        try:
-            if uploaded_file.name.endswith('.csv'):
-                df = pd.read_csv(uploaded_file)
-            else:
-                df = pd.read_excel(uploaded_file)
-
-            st.subheader("📋 Data Preview")
-            st.dataframe(df.head(10), use_container_width=True)
-
-            # Data summary
-            col1, col2, col3, col4 = st.columns(4)
-
-            with col1:
-                st.metric("Total Records", len(df))
-            with col2:
-                st.metric("Total Columns", len(df.columns))
-            with col3:
-                missing_pct = (df.isnull().sum().sum() / (len(df) * len(df.columns))) * 100
-                st.metric("Missing Data", f"{missing_pct:.1f}%")
-            with col4:
-                st.metric("File Size", f"{uploaded_file.size / 1024:.1f} KB")
-
-            # Column analysis
-            with st.expander("📊 Column Analysis"):
-                col_analysis = pd.DataFrame({
-                    'Column': df.columns,
-                    'Data Type': df.dtypes,
-                    'Non-Null Count': df.count(),
-                    'Null Count': df.isnull().sum(),
-                    'Unique Values': df.nunique()
-                })
-                st.dataframe(col_analysis, use_container_width=True)
-
-            # Process button
-            st.markdown("---")
-
-            col1, col2, col3 = st.columns([1, 2, 1])
-
-            with col2:
-                if st.button("🚀 Start Processing", use_container_width=True, type="primary"):
-                    process_data_workflow(df, analysis_type, report_date, {
-                        'include_notifications': include_notifications,
-                        'auto_mapping': auto_mapping,
-                        'quality_checks': quality_checks,
-                        'confidence_threshold': confidence_threshold,
-                        'max_processing_time': max_processing_time,
-                        'priority_level': priority_level
-                    })
-
-        except Exception as e:
-            st.error(f"❌ Error reading file: {str(e)}")
-            st.info("Please ensure the file is a valid CSV or Excel file with proper formatting.")
-
-    # Sample data section
+    # Recent activity section
     st.markdown("---")
-    st.subheader("📝 Sample Data Templates")
+    st.markdown("### 📈 Recent Activity")
+
+    if st.session_state.uploaded_data is not None:
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("#### 📊 Data Summary")
+            if st.session_state.processed_data is not None:
+                data = st.session_state.processed_data
+                st.write(f"**Records:** {len(data):,}")
+                st.write(f"**Columns:** {len(data.columns)}")
+
+                # Show account type distribution if available
+                if 'account_type' in data.columns:
+                    account_dist = data['account_type'].value_counts().head(5)
+                    st.write("**Top Account Types:**")
+                    for acc_type, count in account_dist.items():
+                        st.write(f"• {acc_type}: {count:,}")
+            else:
+                st.info("No data processed yet")
+
+        with col2:
+            st.markdown("#### 🎯 Analysis Status")
+
+            # Data processing status
+            data_status = "✅ Complete" if st.session_state.processed_data is not None else "❌ Pending"
+            st.write(f"**Data Processing:** {data_status}")
+
+            # Dormancy analysis status
+            dormancy_status = "✅ Complete" if st.session_state.dormancy_results else "❌ Pending"
+            st.write(f"**Dormancy Analysis:** {dormancy_status}")
+
+            # Compliance analysis status
+            compliance_status = "✅ Complete" if st.session_state.compliance_results else "❌ Pending"
+            st.write(f"**Compliance Analysis:** {compliance_status}")
+
+            # Data quality status
+            quality_status = "✅ Complete" if st.session_state.data_quality_results else "❌ Pending"
+            st.write(f"**Data Quality Check:** {quality_status}")
+    else:
+        st.info("👋 Upload data to get started with your compliance analysis")
+
+        # Show sample workflow
+        st.markdown("#### 🔄 Typical Workflow")
+        st.markdown("""
+        1. **📁 Data Processing** - Upload and validate your banking data
+        2. **🔍 Data Quality** - Ensure data meets compliance standards
+        3. **💤 Dormancy Analysis** - Identify dormant accounts per CBUAE guidelines
+        4. **⚖️ Compliance Check** - Verify regulatory compliance
+        5. **📋 Generate Reports** - Create comprehensive compliance reports
+        """)
+
+    # System health section
+    st.markdown("---")
+    st.markdown("### 🔧 System Health")
 
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        if st.button("📥 Download Sample CSV", use_container_width=True):
-            sample_data = generate_sample_data()
-            csv = sample_data.to_csv(index=False)
-            st.download_button(
-                label="Download CSV",
-                data=csv,
-                file_name="sample_banking_data.csv",
-                mime="text/csv"
-            )
+        if AGENTS_AVAILABLE:
+            st.success("🟢 All agents operational")
+        else:
+            st.warning("🟡 Demo mode active")
 
     with col2:
-        if st.button("📋 View Data Schema", use_container_width=True):
-            show_data_schema()
+        st.info(f"🕒 Last updated: {datetime.now().strftime('%H:%M:%S')}")
 
     with col3:
-        if st.button("📖 Upload Guide", use_container_width=True):
-            show_upload_guide()
+        demo_status = "🧪 Demo Mode" if DEMO_MODE else "🏭 Production Mode"
+        st.info(demo_status)
 
-def process_data_workflow(df: pd.DataFrame, analysis_type: str, report_date, options: Dict):
-    """Process data through the workflow engine"""
 
-    # Initialize progress tracking
-    progress_bar = st.progress(0)
-    status_text = st.empty()
+def show_data_processing_page():
+    """Data Processing page with upload, quality check, and mapping"""
+    st.markdown('<div class="main-header">📁 Data Processing</div>', unsafe_allow_html=True)
 
-    # Create workflow execution tracking
-    workflow_id = secrets.token_hex(16)
+    # Data Upload Section
+    st.markdown("## 🔄 Data Upload")
 
-    if 'active_workflows' not in st.session_state:
-        st.session_state.active_workflows = {}
+    upload_method = st.selectbox(
+        "Select Upload Method:",
+        ["📄 File Upload", "🔗 URL Import", "🧪 Generate Sample Data"]
+    )
 
-    st.session_state.active_workflows[workflow_id] = {
-        'status': 'starting',
-        'progress': 0,
-        'start_time': datetime.now(),
-        'analysis_type': analysis_type,
-        'total_records': len(df)
-    }
+    uploaded_data = None
 
-    try:
-        # Phase 1: Data preparation
-        status_text.text("🔄 Preparing data for processing...")
-        progress_bar.progress(10)
+    if upload_method == "📄 File Upload":
+        uploaded_file = st.file_uploader(
+            "Choose a file",
+            type=['csv', 'xlsx', 'json'],
+            help="Upload CSV, Excel, or JSON files"
+        )
 
-        # Convert DataFrame to the expected format
-        processed_data = {
-            'accounts': df.to_dict('records'),
-            'metadata': {
-                'source': 'user_upload',
-                'total_records': len(df),
-                'columns': list(df.columns),
-                'upload_time': datetime.now().isoformat()
-            }
-        }
+        if uploaded_file:
+            try:
+                if uploaded_file.name.endswith('.csv'):
+                    uploaded_data = pd.read_csv(uploaded_file)
+                elif uploaded_file.name.endswith(('.xlsx', '.xls')):
+                    uploaded_data = pd.read_excel(uploaded_file)
+                elif uploaded_file.name.endswith('.json'):
+                    uploaded_data = pd.read_json(uploaded_file)
 
-        # Phase 2: Execute workflow
-        status_text.text("🚀 Executing workflow...")
-        progress_bar.progress(30)
+                st.success(f"✅ File uploaded successfully: {uploaded_file.name}")
 
-        # Mock workflow execution for demo
-        import time
-        time.sleep(1)  # Simulate processing
+            except Exception as e:
+                st.error(f"❌ Error reading file: {str(e)}")
 
-        # Phase 3: Generate results
-        status_text.text("📊 Generating results...")
-        progress_bar.progress(70)
+    elif upload_method == "🔗 URL Import":
+        url = st.text_input("Enter CSV URL:", placeholder="https://example.com/data.csv")
 
-        # Mock results
-        results = {
-            'success': True,
-            'workflow_id': workflow_id,
-            'status': 'completed',
-            'total_processing_time': 2.5,
-            'nodes_completed': 8,
-            'nodes_failed': 0,
-            'results': {
-                'data_processing': {
-                    'status': 'completed',
-                    'quality_score': 0.95,
-                    'records_processed': len(df)
-                },
-                'dormancy_analysis': {
-                    'total_analyzed': len(df),
-                    'dormant_found': max(1, int(len(df) * 0.23)),
-                    'high_risk': max(1, int(len(df) * 0.05))
-                },
-                'compliance': {
-                    'status': 'compliant',
-                    'critical_violations': 0
-                },
-                'risk_assessment': {
-                    'overall_score': 0.25
-                }
-            }
-        }
+        if url and st.button("📥 Import from URL"):
+            try:
+                uploaded_data = pd.read_csv(url)
+                st.success("✅ Data imported from URL successfully")
+            except Exception as e:
+                st.error(f"❌ Error importing from URL: {str(e)}")
 
-        # Phase 4: Complete
-        status_text.text("✅ Processing completed successfully!")
-        progress_bar.progress(100)
+    elif upload_method == "🧪 Generate Sample Data":
+        st.info("🔬 Generate sample banking compliance data for testing")
 
-        # Update workflow state
-        st.session_state.active_workflows[workflow_id].update({
-            'status': 'completed',
-            'progress': 100,
-            'results': results,
-            'end_time': datetime.now()
-        })
+        if st.button("🎲 Generate Sample Data"):
+            with st.spinner("Generating sample data..."):
+                uploaded_data = generate_sample_data()
+                st.success("✅ Sample data generated successfully")
 
-        # Show results
-        time.sleep(1)
-        show_workflow_results(results)
+    # Display uploaded data
+    if uploaded_data is not None:
+        st.session_state.uploaded_data = uploaded_data
 
-    except Exception as e:
-        status_text.text(f"❌ Processing failed: {str(e)}")
-        st.error(f"Workflow execution failed: {str(e)}")
-
-        # Update workflow state
-        st.session_state.active_workflows[workflow_id].update({
-            'status': 'failed',
-            'error': str(e),
-            'end_time': datetime.now()
-        })
-
-def show_workflow_results(results: Dict):
-    """Display workflow execution results"""
-
-    st.markdown("---")
-    st.subheader("🎉 Workflow Execution Results")
-
-    if results.get('success'):
-        st.success(f"✅ Workflow completed successfully!")
-
-        # Summary metrics
+        st.markdown("### 📊 Data Preview")
         col1, col2, col3, col4 = st.columns(4)
 
         with col1:
-            st.metric(
-                "Processing Time",
-                f"{results.get('total_processing_time', 0):.1f}s"
-            )
-
+            create_metric_card("Records", format_number(len(uploaded_data)))
         with col2:
-            st.metric(
-                "Nodes Completed",
-                results.get('nodes_completed', 0)
-            )
-
+            create_metric_card("Columns", format_number(len(uploaded_data.columns)))
         with col3:
-            records_processed = results.get('results', {}).get('data_processing', {}).get('records_processed', 0)
-            st.metric(
-                "Records Processed",
-                f"{records_processed:,}"
-            )
-
+            create_metric_card("Memory Usage", f"{uploaded_data.memory_usage().sum() / 1024:.1f} KB")
         with col4:
-            quality_score = results.get('results', {}).get('data_processing', {}).get('quality_score', 0)
-            st.metric(
-                "Data Quality",
-                f"{quality_score:.1%}"
-            )
+            create_metric_card("Missing Values", format_number(uploaded_data.isnull().sum().sum()))
 
-        # Detailed results
-        st.subheader("📋 Detailed Results")
+        # Show data preview
+        st.dataframe(uploaded_data.head(10), use_container_width=True)
 
-        workflow_results = results.get('results', {})
-
-        # Data Processing Results
-        if 'data_processing' in workflow_results:
-            with st.expander("🔧 Data Processing Results"):
-                dp_results = workflow_results['data_processing']
-                st.json(dp_results)
-
-        # Dormancy Analysis Results
-        if 'dormancy_analysis' in workflow_results:
-            with st.expander("😴 Dormancy Analysis Results"):
-                da_results = workflow_results['dormancy_analysis']
-
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Total Analyzed", da_results.get('total_analyzed', 0))
-                with col2:
-                    st.metric("Dormant Found", da_results.get('dormant_found', 0))
-                with col3:
-                    st.metric("High Risk", da_results.get('high_risk', 0))
-
-                # Dormancy breakdown chart
-                if da_results.get('dormant_found', 0) > 0:
-                    dormancy_breakdown = pd.DataFrame({
-                        'Category': ['Active', 'Dormant', 'High Risk'],
-                        'Count': [
-                            da_results.get('total_analyzed', 0) - da_results.get('dormant_found', 0),
-                            da_results.get('dormant_found', 0) - da_results.get('high_risk', 0),
-                            da_results.get('high_risk', 0)
-                        ]
-                    })
-
-                    fig = px.pie(dormancy_breakdown, values='Count', names='Category',
-                               title="Account Status Distribution")
-                    st.plotly_chart(fig, use_container_width=True)
-
-        # Compliance Results
-        if 'compliance' in workflow_results:
-            with st.expander("✅ Compliance Verification Results"):
-                comp_results = workflow_results['compliance']
-
-                if comp_results.get('status') == 'compliant':
-                    st.success("✅ All compliance checks passed!")
-                else:
-                    st.warning("⚠️ Compliance issues detected")
-
-                violations = comp_results.get('critical_violations', 0)
-                if violations > 0:
-                    st.error(f"🚨 {violations} critical violations found")
-                else:
-                    st.success("✅ No critical violations detected")
-
-        # Risk Assessment Results
-        if 'risk_assessment' in workflow_results:
-            with st.expander("⚠️ Risk Assessment Results"):
-                risk_results = workflow_results['risk_assessment']
-
-                risk_score = risk_results.get('overall_score', 0)
-
-                if risk_score < 0.3:
-                    st.success(f"✅ Low Risk (Score: {risk_score:.2f})")
-                elif risk_score < 0.7:
-                    st.warning(f"⚠️ Medium Risk (Score: {risk_score:.2f})")
-                else:
-                    st.error(f"🚨 High Risk (Score: {risk_score:.2f})")
-
-                # Risk gauge
-                fig = go.Figure(go.Indicator(
-                    mode = "gauge+number+delta",
-                    value = risk_score * 100,
-                    domain = {'x': [0, 1], 'y': [0, 1]},
-                    title = {'text': "Overall Risk Score"},
-                    delta = {'reference': 50},
-                    gauge = {'axis': {'range': [None, 100]},
-                             'bar': {'color': "darkblue"},
-                             'steps': [
-                                 {'range': [0, 30], 'color': "lightgreen"},
-                                 {'range': [30, 70], 'color': "yellow"},
-                                 {'range': [70, 100], 'color': "red"}],
-                             'threshold': {'line': {'color': "red", 'width': 4},
-                                          'thickness': 0.75, 'value': 90}}))
-
-                st.plotly_chart(fig, use_container_width=True)
-
-        # Action buttons
+        # Data Quality Analysis
         st.markdown("---")
-        col1, col2, col3 = st.columns(3)
+        st.markdown("## 🔍 Data Quality Analysis")
 
-        with col1:
-            if st.button("📄 Generate Report", use_container_width=True):
-                generate_analysis_report(results)
+        if st.button("🚀 Run Quality Analysis", use_container_width=True):
+            with st.spinner("Analyzing data quality..."):
+                try:
+                    quality_results = run_data_quality_analysis_sync(uploaded_data)
+                    st.session_state.data_quality_results = quality_results
 
-        with col2:
-            if st.button("📧 Send Notifications", use_container_width=True):
-                send_notifications(results)
+                    # Display quality results
+                    show_data_quality_results(quality_results)
 
-        with col3:
-            if st.button("💾 Save Results", use_container_width=True):
-                save_workflow_results(results)
+                except Exception as e:
+                    st.error(f"❌ Quality analysis failed: {str(e)}")
 
-    else:
-        st.error("❌ Workflow execution failed")
-        if results.get('errors'):
-            for error in results['errors']:
-                st.error(f"🚨 {error}")
+        # Show existing quality results
+        if st.session_state.data_quality_results:
+            show_data_quality_results(st.session_state.data_quality_results)
 
-def generate_sample_data():
-    """Generate sample banking data for download"""
+        # Data Mapping Section
+        st.markdown("---")
+        st.markdown("## 🔗 Data Mapping")
 
-    np.random.seed(42)
+        if st.button("🎯 Run Data Mapping", use_container_width=True):
+            with st.spinner("Mapping data to target schema..."):
+                try:
+                    mapping_results = run_data_mapping_sync(uploaded_data)
+                    st.session_state.mapping_results = mapping_results
 
-    # Generate sample accounts
-    n_accounts = 100
+                    # Display mapping results
+                    show_mapping_results(mapping_results)
 
-    data = {
-        'customer_id': [f'CUS{i:06d}' for i in range(1, n_accounts + 1)],
-        'account_id': [f'ACC{i:06d}' for i in range(1, n_accounts + 1)],
-        'customer_type': np.random.choice(['INDIVIDUAL', 'CORPORATE'], n_accounts, p=[0.8, 0.2]),
-        'full_name_en': [f'Customer {i}' for i in range(1, n_accounts + 1)],
-        'account_type': np.random.choice(['CURRENT', 'SAVINGS', 'INVESTMENT'], n_accounts, p=[0.4, 0.4, 0.2]),
-        'account_status': np.random.choice(['ACTIVE', 'DORMANT', 'CLOSED'], n_accounts, p=[0.7, 0.25, 0.05]),
-        'balance_current': np.random.lognormal(8, 1.5, n_accounts).round(2),
-        'currency': np.random.choice(['AED', 'USD', 'EUR'], n_accounts, p=[0.7, 0.2, 0.1]),
-        'last_transaction_date': pd.date_range(
-            start='2020-01-01',
-            end='2024-12-01',
-            periods=n_accounts
-        ).strftime('%Y-%m-%d'),
-        'dormancy_period_months': np.random.randint(0, 60, n_accounts),
-        'has_outstanding_facilities': np.random.choice(['YES', 'NO'], n_accounts, p=[0.3, 0.7]),
-        'risk_rating': np.random.choice(['LOW', 'MEDIUM', 'HIGH'], n_accounts, p=[0.6, 0.3, 0.1]),
-        'last_contact_date': pd.date_range(
-            start='2021-01-01',
-            end='2024-11-01',
-            periods=n_accounts
-        ).strftime('%Y-%m-%d'),
-        'address_known': np.random.choice(['YES', 'NO'], n_accounts, p=[0.85, 0.15])
-    }
+                except Exception as e:
+                    st.error(f"❌ Data mapping failed: {str(e)}")
 
-    return pd.DataFrame(data)
+        # Show existing mapping results
+        if st.session_state.mapping_results:
+            show_mapping_results(st.session_state.mapping_results)
 
-def show_data_schema():
-    """Display the expected data schema"""
 
-    st.subheader("📋 Expected Data Schema")
+def show_data_quality_results(results):
+    """Display data quality analysis results"""
+    st.markdown("### 📈 Quality Analysis Results")
 
-    schema_info = {
-        'Column Name': [
-            'customer_id', 'account_id', 'customer_type', 'full_name_en',
-            'account_type', 'account_status', 'balance_current', 'currency',
-            'last_transaction_date', 'dormancy_period_months', 'has_outstanding_facilities',
-            'risk_rating', 'last_contact_date', 'address_known'
-        ],
-        'Data Type': [
-            'String', 'String', 'String', 'String',
-            'String', 'String', 'Float', 'String',
-            'Date', 'Integer', 'Boolean', 'String', 'Date', 'Boolean'
-        ],
-        'Required': [
-            'Yes', 'Yes', 'Yes', 'Yes',
-            'Yes', 'Yes', 'Yes', 'No',
-            'Yes', 'No', 'No', 'No', 'No', 'No'
-        ],
-        'Description': [
-            'Unique customer identifier',
-            'Unique account identifier',
-            'INDIVIDUAL or CORPORATE',
-            'Customer name in English',
-            'Account type (CURRENT, SAVINGS, etc.)',
-            'Current account status',
-            'Current account balance',
-            'Account currency (AED, USD, etc.)',
-            'Date of last customer transaction',
-            'Months since account became dormant',
-            'Whether customer has outstanding facilities',
-            'Customer risk rating',
-            'Date of last customer contact',
-            'Whether customer address is known'
-        ]
-    }
-
-    schema_df = pd.DataFrame(schema_info)
-    st.dataframe(schema_df, use_container_width=True)
-
-def show_upload_guide():
-    """Display upload guide and best practices"""
-
-    st.subheader("📖 Data Upload Guide")
-
-    st.markdown("""
-    ### 📁 Supported File Formats
-    - **CSV files** (.csv) - Recommended format
-    - **Excel files** (.xlsx, .xls) - Supported with automatic conversion
-    
-    ### 📋 Data Requirements
-    
-    #### Mandatory Fields
-    - `customer_id` - Unique identifier for each customer
-    - `account_id` - Unique identifier for each account  
-    - `account_type` - Type of account (CURRENT, SAVINGS, INVESTMENT, etc.)
-    - `account_status` - Current status (ACTIVE, DORMANT, CLOSED)
-    - `balance_current` - Current account balance
-    - `last_transaction_date` - Date of last customer-initiated transaction
-    
-    #### Recommended Fields
-    - `customer_type` - INDIVIDUAL or CORPORATE
-    - `currency` - Account currency (AED, USD, EUR, etc.)
-    - `risk_rating` - Customer risk rating (LOW, MEDIUM, HIGH)
-    - `has_outstanding_facilities` - YES/NO for outstanding credit facilities
-    - `address_known` - Whether current address is known
-    
-    ### ✅ Best Practices
-    
-    1. **Data Quality**
-       - Ensure all mandatory fields are populated
-       - Use consistent date formats (YYYY-MM-DD recommended)
-       - Standardize categorical values (e.g., always use "CURRENT" not "Current" or "current")
-    
-    2. **File Preparation**
-       - Remove any merged cells in Excel files
-       - Ensure headers are in the first row
-       - Avoid special characters in column names
-       - Keep file size under 50MB for optimal performance
-    
-    3. **Data Privacy**
-       - Remove or anonymize sensitive customer information
-       - Ensure compliance with data protection regulations
-       - Use customer IDs instead of names where possible
-    
-    ### 🔧 Troubleshooting
-    
-    **Common Issues:**
-    - **"Column not found" errors** - Check column names match expected schema
-    - **Date parsing errors** - Ensure dates are in YYYY-MM-DD format
-    - **Memory errors** - Split large files into smaller batches
-    - **Encoding issues** - Save CSV files with UTF-8 encoding
-    
-    **Performance Tips:**
-    - Files with 10,000+ records may take several minutes to process
-    - Enable "Enhanced Quality Checks" for thorough validation
-    - Use "Auto Data Mapping" for automatic field detection
-    """)
-
-def show_data_mapping():
-    """Display data mapping interface"""
-
-    st.markdown('<div class="main-header">🔗 Intelligent Data Mapping</div>', unsafe_allow_html=True)
-
-    st.markdown("""
-    The data mapping system uses AI to automatically map your data fields to the standard 
-    banking compliance schema. Upload your file and let our system intelligently match fields.
-    """)
-
-    # Upload section
-    uploaded_file = st.file_uploader(
-        "Choose a file for mapping analysis",
-        type=['csv', 'xlsx', 'xls'],
-        help="Upload a file to analyze and map its fields"
-    )
-
-    col1, col2 = st.columns(2)
+    col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        confidence_threshold = st.slider(
-            "Confidence Threshold",
-            0.5, 1.0, 0.8, 0.05,
-            help="Minimum confidence level for automatic mapping"
-        )
-
-        use_llm_assistance = st.checkbox(
-            "🤖 Use AI Assistance",
-            value=True,
-            help="Use large language model for low-confidence mappings"
-        )
-
+        create_metric_card("Quality Score", f"{results['overall_quality_score']}%")
     with col2:
-        save_patterns = st.checkbox(
-            "💾 Save Mapping Patterns",
-            value=True,
-            help="Save successful mappings for future use"
-        )
+        create_metric_card("Records", format_number(results['total_records']))
+    with col3:
+        create_metric_card("Columns", format_number(results['total_columns']))
+    with col4:
+        create_metric_card("Missing Values", format_number(results['missing_values_total']))
 
-        preview_mappings = st.checkbox(
-            "👁️ Preview Before Apply",
-            value=True,
-            help="Review mappings before applying them"
-        )
+    # Quality recommendations
+    st.markdown("#### 💡 Recommendations")
+    for rec in results['recommendations']:
+        st.info(f"• {rec}")
 
-    if uploaded_file is not None:
-        try:
-            # Read the file
-            if uploaded_file.name.endswith('.csv'):
-                df = pd.read_csv(uploaded_file)
-            else:
-                df = pd.read_excel(uploaded_file)
+    # Column analysis
+    if st.checkbox("📊 Show detailed column analysis"):
+        col_df = pd.DataFrame.from_dict(results['column_analysis'], orient='index')
+        col_df = col_df.reset_index().rename(columns={'index': 'Column'})
+        st.dataframe(col_df, use_container_width=True)
 
-            st.success(f"✅ File loaded: {len(df)} rows, {len(df.columns)} columns")
 
-            # Show column preview
-            st.subheader("📊 Source Data Preview")
-            st.dataframe(df.head(), use_container_width=True)
+def show_mapping_results(results):
+    """Display data mapping results"""
+    st.markdown("### 🎯 Mapping Results")
 
-            # Perform mapping analysis
-            if st.button("🔍 Analyze Field Mappings", type="primary"):
+    col1, col2, col3, col4 = st.columns(4)
 
-                with st.spinner("🤖 Analyzing field mappings..."):
-                    mapping_results = perform_data_mapping_analysis(
-                        df, confidence_threshold, use_llm_assistance
-                    )
+    with col1:
+        create_metric_card("Auto-Mapping", f"{results['auto_mapping_percentage']}%")
+    with col2:
+        create_metric_card("Total Fields", format_number(results['total_fields']))
+    with col3:
+        create_metric_card("Mapped Fields", format_number(results['mapped_fields']))
+    with col4:
+        status = "✅ Ready" if results['transformation_ready'] else "⚠️ Review Needed"
+        create_metric_card("Status", status)
 
-                show_mapping_results(mapping_results, df)
+    # Mapping recommendations
+    st.markdown("#### 💡 Recommendations")
+    for rec in results['recommendations']:
+        st.info(f"• {rec}")
 
-        except Exception as e:
-            st.error(f"❌ Error reading file: {str(e)}")
+    # Field mappings
+    if st.checkbox("🔗 Show field mappings"):
+        mappings_df = pd.DataFrame(results['field_mappings'])
+        st.dataframe(mappings_df, use_container_width=True)
 
-def perform_data_mapping_analysis(df: pd.DataFrame, confidence_threshold: float, use_llm: bool):
-    """Perform intelligent data mapping analysis"""
+    # Set processed data if mapping is successful
+    if results['transformation_ready'] and st.session_state.uploaded_data is not None:
+        st.session_state.processed_data = st.session_state.uploaded_data.copy()
+        st.success("✅ Data is ready for dormancy analysis!")
 
-    # Mock mapping analysis for demo
-    source_columns = df.columns.tolist()
 
-    # Standard target schema
-    target_schema = [
-        'customer_id', 'account_id', 'customer_type', 'full_name_en',
-        'account_type', 'account_status', 'balance_current', 'currency',
-        'last_transaction_date', 'dormancy_period_months', 'has_outstanding_facilities',
-        'risk_rating', 'last_contact_date', 'address_known'
-    ]
+def show_dormancy_analysis_page():
+    """Dormancy Analysis page with all dormancy agents"""
+    st.markdown('<div class="main-header">💤 Dormancy Analysis</div>', unsafe_allow_html=True)
 
-    # Simple mapping logic for demo
-    mappings = []
+    if st.session_state.processed_data is None:
+        st.warning("⚠️ Please process data in the Data Processing section first")
+        return
 
-    for source_col in source_columns:
-        source_lower = source_col.lower().replace('_', ' ').replace('-', ' ')
+    data = st.session_state.processed_data
 
-        best_match = None
-        best_confidence = 0.0
+    st.markdown("## 🎯 Analysis Configuration")
 
-        for target_col in target_schema:
-            target_lower = target_col.lower().replace('_', ' ')
+    col1, col2 = st.columns(2)
+    with col1:
+        report_date = st.date_input("Report Date", datetime.now().date())
+    with col2:
+        analysis_scope = st.selectbox("Analysis Scope", ["All Agents", "Custom Selection"])
 
-            # Simple similarity based on common words
-            source_words = set(source_lower.split())
-            target_words = set(target_lower.split())
+    if st.button("🚀 Run Dormancy Analysis", use_container_width=True):
+        with st.spinner("Running comprehensive dormancy analysis..."):
+            try:
+                dormancy_results = run_dormancy_analysis_sync(data, str(report_date))
+                st.session_state.dormancy_results = dormancy_results
 
-            if source_words & target_words:
-                confidence = len(source_words & target_words) / len(source_words | target_words)
-                if confidence > best_confidence:
-                    best_confidence = confidence
-                    best_match = target_col
+                st.success("✅ Dormancy analysis completed!")
 
-        # Boost confidence for exact or near-exact matches
-        if source_lower in target_lower or target_lower in source_lower:
-            best_confidence = min(1.0, best_confidence + 0.3)
+            except Exception as e:
+                st.error(f"❌ Dormancy analysis failed: {str(e)}")
 
-        mappings.append({
-            'source_field': source_col,
-            'target_field': best_match,
-            'confidence': best_confidence,
-            'confidence_level': 'High' if best_confidence >= 0.8 else 'Medium' if best_confidence >= 0.6 else 'Low',
-            'mapping_strategy': 'Automatic' if best_confidence >= confidence_threshold else 'Manual',
-            'sample_values': df[source_col].dropna().head(3).tolist()
-        })
+    # Display dormancy results
+    if st.session_state.dormancy_results:
+        show_dormancy_results(st.session_state.dormancy_results)
 
-    return {
-        'mappings': mappings,
-        'total_fields': len(source_columns),
-        'high_confidence': len([m for m in mappings if m['confidence'] >= 0.8]),
-        'medium_confidence': len([m for m in mappings if 0.6 <= m['confidence'] < 0.8]),
-        'low_confidence': len([m for m in mappings if m['confidence'] < 0.6]),
-        'unmapped_fields': [m['source_field'] for m in mappings if m['target_field'] is None]
-    }
 
-def show_mapping_results(results: Dict, df: pd.DataFrame):
-    """Display mapping analysis results"""
-
-    st.subheader("🎯 Mapping Analysis Results")
+def show_dormancy_results(results):
+    """Display dormancy analysis results"""
+    st.markdown("## 📊 Dormancy Analysis Results")
 
     # Summary metrics
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        st.metric("Total Fields", results['total_fields'])
+        create_metric_card("Total Analyzed", format_number(results["total_accounts_analyzed"]))
     with col2:
-        st.metric("High Confidence", results['high_confidence'])
+        create_metric_card("Dormant Found", format_number(results["summary"]["total_dormant_found"]))
     with col3:
-        st.metric("Medium Confidence", results['medium_confidence'])
+        create_metric_card("Critical Agents", format_number(results["summary"]["critical_agents"]))
     with col4:
-        st.metric("Low Confidence", results['low_confidence'])
+        create_metric_card("High Priority", format_number(results["summary"]["high_priority_agents"]))
 
-    # Confidence distribution chart
-    confidence_data = pd.DataFrame({
-        'Confidence Level': ['High (≥80%)', 'Medium (60-80%)', 'Low (<60%)'],
-        'Count': [results['high_confidence'], results['medium_confidence'], results['low_confidence']]
-    })
+    st.markdown("---")
+    st.markdown("### 🤖 Active Dormancy Agents")
+    st.caption("Only agents with dormant accounts > 0 are shown")
 
-    fig = px.bar(confidence_data, x='Confidence Level', y='Count',
-                title="Mapping Confidence Distribution",
-                color='Count', color_continuous_scale='RdYlGn')
-    st.plotly_chart(fig, use_container_width=True)
+    # Filter and display agents with results
+    active_agents = {k: v for k, v in results["agents_results"].items() if v["dormant_found"] > 0}
 
-    # Detailed mappings table
-    st.subheader("📋 Detailed Field Mappings")
+    for agent_id, agent_info in active_agents.items():
+        with st.expander(f"🔍 {agent_info['name']} - {agent_info['dormant_found']} accounts found", expanded=False):
+            col1, col2 = st.columns([2, 1])
 
-    mappings_df = pd.DataFrame(results['mappings'])
+            with col1:
+                st.markdown(f"**Description:** {agent_info['description']}")
+                st.markdown(f"**CBUAE Article:** {agent_info['article']}")
+                st.markdown(f"**Priority Level:** `{agent_info['priority']}`")
 
-    # Color code by confidence
-    def highlight_confidence(row):
-        if row['confidence'] >= 0.8:
-            return ['background-color: #d4edda'] * len(row)
-        elif row['confidence'] >= 0.6:
-            return ['background-color: #fff3cd'] * len(row)
-        else:
-            return ['background-color: #f8d7da'] * len(row)
+                # Summary stats
+                if 'sample_data' in agent_info:
+                    sample_df = agent_info['sample_data']
+                    total_value = sample_df['balance_current'].sum()
+                    avg_dormancy = sample_df['years_dormant'].mean()
 
-    styled_df = mappings_df.style.apply(highlight_confidence, axis=1)
-    st.dataframe(styled_df, use_container_width=True)
+                    st.markdown(f"**Total Value:** AED {total_value:,.2f}")
+                    st.markdown(f"**Average Dormancy Period:** {avg_dormancy:.1f} years")
 
-    # Allow manual adjustments
-    if st.checkbox("🔧 Enable Manual Adjustments"):
-        st.subheader("✏️ Manual Field Mapping")
+            with col2:
+                # Priority badge
+                priority_color = {
+                    "CRITICAL": "🔴",
+                    "HIGH": "🟠",
+                    "MEDIUM": "🟡",
+                    "LOW": "🟢"
+                }
+                st.markdown(f"### {priority_color.get(agent_info['priority'], '⚪')} {agent_info['priority']}")
+                st.metric("Accounts Found", agent_info['dormant_found'])
 
-        # Create manual mapping interface
-        manual_mappings = {}
-
-        target_options = ['None'] + [
-            'customer_id', 'account_id', 'customer_type', 'full_name_en',
-            'account_type', 'account_status', 'balance_current', 'currency',
-            'last_transaction_date', 'dormancy_period_months', 'has_outstanding_facilities',
-            'risk_rating', 'last_contact_date', 'address_known'
-        ]
-
-        for i, mapping in enumerate(results['mappings']):
-            if mapping['confidence'] < 0.8:  # Only show low/medium confidence mappings
-                col1, col2, col3 = st.columns([2, 2, 1])
+            # Download buttons
+            if 'sample_data' in agent_info:
+                col1, col2 = st.columns(2)
 
                 with col1:
-                    st.text(f"Source: {mapping['source_field']}")
-                    st.caption(f"Sample: {', '.join(map(str, mapping['sample_values']))}")
-
-                with col2:
-                    default_idx = 0
-                    if mapping['target_field'] and mapping['target_field'] in target_options:
-                        default_idx = target_options.index(mapping['target_field'])
-
-                    manual_mappings[mapping['source_field']] = st.selectbox(
-                        f"Map to:",
-                        target_options,
-                        index=default_idx,
-                        key=f"manual_mapping_{i}"
+                    create_download_button(
+                        agent_info['sample_data'],
+                        f"{agent_id}_dormant_accounts",
+                        "📥 Download Account Details"
                     )
 
-                with col3:
-                    st.metric("Confidence", f"{mapping['confidence']:.0%}")
-
-    # Apply mappings button
-    st.markdown("---")
-    col1, col2, col3 = st.columns([1, 2, 1])
-
-    with col2:
-        if st.button("✅ Apply Mappings and Continue", use_container_width=True, type="primary"):
-            # Apply mappings and redirect to processing
-            st.success("🎉 Mappings applied successfully!")
-            st.info("Redirecting to data processing...")
-
-            # Here you would apply the mappings and continue with processing
-            # For demo, just show a success message
-            st.balloons()
-
-def show_workflow_monitor():
-    """Display workflow monitoring interface"""
-
-    st.markdown('<div class="main-header">⚙️ Workflow Monitor</div>', unsafe_allow_html=True)
-
-    # Active workflows section
-    st.subheader("🔄 Active Workflows")
-
-    if 'active_workflows' in st.session_state and st.session_state.active_workflows:
-        for workflow_id, workflow_info in st.session_state.active_workflows.items():
-            with st.container():
-                col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
-
-                with col1:
-                    st.markdown(f"**Workflow ID:** `{workflow_id[:12]}...`")
-                    st.caption(f"Type: {workflow_info.get('analysis_type', 'Unknown')}")
-
                 with col2:
-                    status = workflow_info.get('status', 'unknown')
-                    if status == 'completed':
-                        st.success(f"✅ {status.title()}")
-                    elif status == 'failed':
-                        st.error(f"❌ {status.title()}")
-                    elif status in ['starting', 'running']:
-                        st.info(f"🔄 {status.title()}")
-                    else:
-                        st.warning(f"⚠️ {status.title()}")
+                    # Create summary data
+                    summary_data = pd.DataFrame([{
+                        'Agent': agent_info['name'],
+                        'CBUAE_Article': agent_info['article'],
+                        'Accounts_Found': agent_info['dormant_found'],
+                        'Priority': agent_info['priority'],
+                        'Total_Value': sample_df['balance_current'].sum() if 'sample_data' in agent_info else 0,
+                        'Analysis_Date': results["analysis_date"]
+                    }])
 
-                with col3:
-                    progress = workflow_info.get('progress', 0)
-                    st.progress(progress / 100)
-                    st.caption(f"Progress: {progress}%")
+                    create_download_button(
+                        summary_data,
+                        f"{agent_id}_summary",
+                        "📄 Download Summary"
+                    )
 
-                with col4:
-                    if st.button("👁️", key=f"view_{workflow_id}"):
-                        show_workflow_details(workflow_id, workflow_info)
+            # Show data preview
+            if st.checkbox(f"👁️ Preview data for {agent_info['name']}", key=f"preview_{agent_id}"):
+                if 'sample_data' in agent_info:
+                    st.dataframe(agent_info['sample_data'], use_container_width=True)
 
-                st.markdown("---")
-    else:
-        st.info("📭 No active workflows found")
 
-        if st.button("🚀 Start New Workflow", use_container_width=True):
-            st.session_state.nav_override = "Data Upload"
-            st.rerun()
+def show_compliance_analysis_page():
+    """Compliance Analysis page with compliance agents"""
+    st.markdown('<div class="main-header">⚖️ Compliance Analysis</div>', unsafe_allow_html=True)
 
-    # Workflow history
-    st.subheader("📈 Workflow Statistics")
+    if not st.session_state.dormancy_results:
+        st.warning("⚠️ Please run dormancy analysis first")
+        return
 
-    # Generate mock statistics
+    st.markdown("## 🎯 Compliance Configuration")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        compliance_scope = st.selectbox("Compliance Scope", ["All Agents", "High Priority Only", "Custom Selection"])
+    with col2:
+        include_recommendations = st.checkbox("Include Recommendations", value=True)
+
+    if st.button("🚀 Run Compliance Analysis", use_container_width=True):
+        with st.spinner("Running comprehensive compliance analysis..."):
+            try:
+                compliance_results = run_compliance_analysis_sync(
+                    st.session_state.dormancy_results,
+                    st.session_state.processed_data
+                )
+                st.session_state.compliance_results = compliance_results
+
+                st.success("✅ Compliance analysis completed!")
+
+            except Exception as e:
+                st.error(f"❌ Compliance analysis failed: {str(e)}")
+
+    # Display compliance results
+    if st.session_state.compliance_results:
+        show_compliance_results(st.session_state.compliance_results)
+
+
+def show_compliance_results(results):
+    """Display compliance analysis results"""
+    st.markdown("## ⚖️ Compliance Analysis Results")
+
+    # Summary metrics
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        st.metric("Total Workflows", "47", delta="3 this week")
+        create_metric_card("Total Violations", format_number(results["total_violations"]))
     with col2:
-        st.metric("Success Rate", "94.7%", delta="2.1%")
+        create_metric_card("Actions Required", format_number(results["total_actions"]))
     with col3:
-        st.metric("Avg Processing Time", "3.2 min", delta="-0.5 min")
+        create_metric_card("Critical Issues", format_number(results["summary"]["critical_violations"]))
     with col4:
-        st.metric("Data Quality Score", "0.95", delta="0.02")
+        create_metric_card("Categories Affected", format_number(results["summary"]["categories_affected"]))
 
-    # Performance charts
-    col1, col2 = st.columns(2)
+    # Compliance overview chart
+    st.markdown("### 📊 Compliance Overview")
 
-    with col1:
-        # Workflow volume over time
-        dates = pd.date_range(start='2024-01-01', end='2024-12-01', freq='W')
-        workflow_volume = pd.DataFrame({
-            'Date': dates,
-            'Workflows': np.random.randint(5, 15, len(dates)),
-            'Success': np.random.randint(4, 14, len(dates))
-        })
+    # Create pie chart of violations by priority
+    priorities = []
+    counts = []
 
-        fig = px.line(workflow_volume, x='Date', y=['Workflows', 'Success'],
-                     title="Weekly Workflow Volume")
-        st.plotly_chart(fig, use_container_width=True)
+    for agent_info in results["compliance_agents"].values():
+        if agent_info["violations_found"] > 0:
+            priorities.append(agent_info["priority"])
 
-    with col2:
-        # Processing time distribution
-        processing_times = np.random.lognormal(1, 0.5, 100)
+    priority_counts = {p: priorities.count(p) for p in set(priorities)}
 
-        fig = px.histogram(x=processing_times, nbins=20,
-                          title="Processing Time Distribution",
-                          labels={'x': 'Processing Time (minutes)', 'y': 'Count'})
-        st.plotly_chart(fig, use_container_width=True)
-
-    # System health monitoring
-    st.subheader("🏥 System Health")
-
-    health_data = [
-        {"Component": "Workflow Engine", "Status": "Healthy", "Uptime": "99.9%", "Last Check": "2 min ago"},
-        {"Component": "Memory Agent", "Status": "Healthy", "Uptime": "99.8%", "Last Check": "1 min ago"},
-        {"Component": "MCP Client", "Status": "Connected", "Uptime": "99.7%", "Last Check": "30 sec ago"},
-        {"Component": "Database", "Status": "Healthy", "Uptime": "100%", "Last Check": "1 min ago"},
-        {"Component": "Notification Service", "Status": "Healthy", "Uptime": "99.5%", "Last Check": "2 min ago"}
-    ]
-
-    health_df = pd.DataFrame(health_data)
-
-    # Style the health status
-    def style_status(val):
-        if val in ['Healthy', 'Connected']:
-            return 'color: green'
-        elif val in ['Warning']:
-            return 'color: orange'
-        elif val in ['Error', 'Disconnected']:
-            return 'color: red'
-        return ''
-
-    styled_health = health_df.style.applymap(style_status, subset=['Status'])
-    st.dataframe(styled_health, use_container_width=True)
-
-def show_workflow_details(workflow_id: str, workflow_info: Dict):
-    """Show detailed workflow information"""
-
-    st.markdown(f"### 📊 Workflow Details: `{workflow_id[:12]}...`")
-
-    # Basic information
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.markdown("**Workflow Information:**")
-        st.text(f"ID: {workflow_id}")
-        st.text(f"Type: {workflow_info.get('analysis_type', 'Unknown')}")
-        st.text(f"Status: {workflow_info.get('status', 'Unknown')}")
-        st.text(f"Records: {workflow_info.get('total_records', 0):,}")
-
-    with col2:
-        st.markdown("**Timing Information:**")
-        start_time = workflow_info.get('start_time')
-        if start_time:
-            st.text(f"Started: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
-
-        end_time = workflow_info.get('end_time')
-        if end_time:
-            st.text(f"Completed: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
-            duration = end_time - start_time
-            st.text(f"Duration: {duration.total_seconds():.1f}s")
-
-    # Results if available
-    if 'results' in workflow_info:
-        st.markdown("**Results:**")
-        st.json(workflow_info['results'])
-
-    # Error information if failed
-    if workflow_info.get('status') == 'failed' and 'error' in workflow_info:
-        st.error(f"Error: {workflow_info['error']}")
-
-def show_compliance_reports():
-    """Display compliance reports interface"""
-
-    st.markdown('<div class="main-header">📋 Compliance Reports</div>', unsafe_allow_html=True)
-
-    # Report generation section
-    st.subheader("📄 Generate New Report")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        report_type = st.selectbox(
-            "Report Type",
-            options=[
-                "comprehensive_compliance",
-                "dormancy_analysis",
-                "risk_assessment",
-                "cbuae_summary",
-                "executive_dashboard"
-            ],
-            format_func=lambda x: {
-                "comprehensive_compliance": "📊 Comprehensive Compliance Report",
-                "dormancy_analysis": "😴 Dormancy Analysis Report",
-                "risk_assessment": "⚠️ Risk Assessment Report",
-                "cbuae_summary": "🏛️ CBUAE Regulatory Summary",
-                "executive_dashboard": "👔 Executive Dashboard"
-            }[x]
+    if priority_counts:
+        fig = px.pie(
+            values=list(priority_counts.values()),
+            names=list(priority_counts.keys()),
+            title="Violations by Priority Level",
+            color_discrete_map={
+                "CRITICAL": "#f44336",
+                "HIGH": "#ff9800",
+                "MEDIUM": "#ffc107",
+                "LOW": "#4caf50"
+            }
         )
-
-        report_period = st.selectbox(
-            "Report Period",
-            ["Last 30 Days", "Last Quarter", "Last 6 Months", "Last Year", "Custom Range"]
-        )
-
-    with col2:
-        include_charts = st.checkbox("📊 Include Visualizations", value=True)
-        include_recommendations = st.checkbox("💡 Include Recommendations", value=True)
-        export_format = st.selectbox("Export Format", ["PDF", "Excel", "Word", "HTML"])
-
-        if report_period == "Custom Range":
-            col1, col2 = st.columns(2)
-            with col1:
-                start_date = st.date_input("Start Date")
-            with col2:
-                end_date = st.date_input("End Date")
-
-    if st.button("📄 Generate Report", type="primary", use_container_width=True):
-        generate_compliance_report_interface(report_type, report_period, include_charts, include_recommendations, export_format)
-
-    st.markdown("---")
-
-    # Recent reports
-    st.subheader("📚 Recent Reports")
-
-    # Mock recent reports data
-    recent_reports = [
-        {
-            "Title": "Monthly Compliance Summary - November 2024",
-            "Type": "Comprehensive Compliance",
-            "Generated": "2024-12-01 09:30",
-            "Status": "Completed",
-            "Size": "2.3 MB"
-        },
-        {
-            "Title": "Q4 Dormancy Analysis Report",
-            "Type": "Dormancy Analysis",
-            "Generated": "2024-11-28 14:15",
-            "Status": "Completed",
-            "Size": "1.8 MB"
-        },
-        {
-            "Title": "Risk Assessment - High Value Accounts",
-            "Type": "Risk Assessment",
-            "Generated": "2024-11-25 11:45",
-            "Status": "Completed",
-            "Size": "945 KB"
-        }
-    ]
-
-    for report in recent_reports:
-        with st.container():
-            col1, col2, col3, col4, col5 = st.columns([3, 2, 2, 1, 1])
-
-            with col1:
-                st.markdown(f"**{report['Title']}**")
-                st.caption(f"Type: {report['Type']}")
-
-            with col2:
-                st.text(report['Generated'])
-
-            with col3:
-                st.success(f"✅ {report['Status']}")
-
-            with col4:
-                st.text(report['Size'])
-
-            with col5:
-                if st.button("📥", key=f"download_{report['Title']}", help="Download Report"):
-                    st.success("📥 Download started!")
-
-            st.markdown("---")
-
-    # Compliance analytics
-    st.subheader("📈 Compliance Analytics")
-
-    # CBUAE article compliance over time
-    col1, col2 = st.columns(2)
-
-    with col1:
-        # Compliance trends
-        dates = pd.date_range(start='2024-01-01', end='2024-12-01', freq='M')
-        compliance_trends = pd.DataFrame({
-            'Month': dates,
-            'Overall_Compliance': np.random.uniform(0.85, 0.98, len(dates)),
-            'Article_2_1_1': np.random.uniform(0.88, 0.96, len(dates)),
-            'Article_3_1': np.random.uniform(0.82, 0.94, len(dates)),
-            'Article_8_1': np.random.uniform(0.79, 0.91, len(dates))
-        })
-
-        fig = px.line(compliance_trends, x='Month',
-                     y=['Overall_Compliance', 'Article_2_1_1', 'Article_3_1', 'Article_8_1'],
-                     title="Compliance Trends by CBUAE Article")
-        fig.update_layout(yaxis_title="Compliance Rate", height=400)
-        st.plotly_chart(fig, use_container_width=True)
-
-    with col2:
-        # Violation breakdown
-        violation_data = pd.DataFrame({
-            'Article': ['Art. 2.1.1', 'Art. 2.2', 'Art. 3.1', 'Art. 3.4', 'Art. 8.1'],
-            'Violations': [5, 12, 8, 3, 15],
-            'Severity': ['Medium', 'High', 'Low', 'Medium', 'High']
-        })
-
-        fig = px.bar(violation_data, x='Article', y='Violations', color='Severity',
-                    title="Violations by CBUAE Article",
-                    color_discrete_map={'Low': 'green', 'Medium': 'orange', 'High': 'red'})
         fig.update_layout(height=400)
         st.plotly_chart(fig, use_container_width=True)
 
-def generate_compliance_report_interface(report_type: str, report_period: str,
-                                        include_charts: bool, include_recommendations: bool,
-                                        export_format: str):
-    """Generate compliance report interface"""
-
-    with st.spinner("📄 Generating compliance report..."):
-        # Simulate report generation
-        import time
-        time.sleep(2)
-
-        # Mock report data
-        report_data = {
-            'title': f'{report_type.replace("_", " ").title()} Report',
-            'period': report_period,
-            'generated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'total_accounts': 12847,
-            'dormant_accounts': 2954,
-            'compliance_score': 94.7,
-            'critical_violations': 0,
-            'recommendations': [
-                'Implement automated contact attempt tracking',
-                'Review high-value dormant account procedures',
-                'Update customer address verification process'
-            ] if include_recommendations else []
-        }
-
-        st.success("✅ Report generated successfully!")
-
-        # Display report preview
-        st.subheader("📋 Report Preview")
-
-        st.markdown(f"""
-        **Report Title:** {report_data['title']}  
-        **Period:** {report_data['period']}  
-        **Generated:** {report_data['generated_at']}  
-        
-        **Executive Summary:**
-        - Total Accounts Analyzed: {report_data['total_accounts']:,}
-        - Dormant Accounts Identified: {report_data['dormant_accounts']:,}
-        - Overall Compliance Score: {report_data['compliance_score']}%
-        - Critical Violations: {report_data['critical_violations']}
-        """)
-
-        if include_charts:
-            # Sample chart
-            fig = px.pie(
-                values=[report_data['total_accounts'] - report_data['dormant_accounts'], report_data['dormant_accounts']],
-                names=['Active', 'Dormant'],
-                title="Account Status Distribution"
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-        if include_recommendations and report_data['recommendations']:
-            st.markdown("**Key Recommendations:**")
-            for i, rec in enumerate(report_data['recommendations'], 1):
-                st.markdown(f"{i}. {rec}")
-
-        # Download button
-        if st.button(f"📥 Download {export_format} Report", use_container_width=True):
-            st.success(f"📥 {export_format} report download started!")
-
-def show_risk_analysis():
-    """Display risk analysis interface"""
-
-    st.markdown('<div class="main-header">⚠️ Risk Analysis Dashboard</div>', unsafe_allow_html=True)
-
-    # Risk overview metrics
-    col1, col2, col3, col4 = st.columns(4)
-
-    with col1:
-        st.metric("Overall Risk Score", "0.25", delta="-0.03", delta_color="inverse")
-    with col2:
-        st.metric("High Risk Accounts", "127", delta="+5")
-    with col3:
-        st.metric("Critical Alerts", "3", delta="-2", delta_color="inverse")
-    with col4:
-        st.metric("Risk Trend", "Decreasing", delta="Stable", delta_color="inverse")
-
-    # Risk distribution
-    st.subheader("📊 Risk Distribution")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        # Risk level distribution
-        risk_data = pd.DataFrame({
-            'Risk Level': ['Low', 'Medium', 'High', 'Critical'],
-            'Account Count': [8456, 3214, 127, 3],
-            'Percentage': [71.2, 27.1, 1.1, 0.6]
-        })
-
-        fig = px.pie(risk_data, values='Account Count', names='Risk Level',
-                    title="Risk Level Distribution",
-                    color_discrete_map={
-                        'Low': '#28a745',
-                        'Medium': '#ffc107',
-                        'High': '#fd7e14',
-                        'Critical': '#dc3545'
-                    })
-        st.plotly_chart(fig, use_container_width=True)
-
-    with col2:
-        # Risk factors
-        risk_factors = pd.DataFrame({
-            'Factor': ['High Value Dormant', 'Compliance Violations', 'Operational Risk',
-                      'Reputational Risk', 'Regulatory Risk'],
-            'Impact Score': [0.85, 0.72, 0.45, 0.38, 0.29],
-            'Trend': ['↑', '↓', '→', '↓', '→']
-        })
-
-        fig = px.bar(risk_factors, x='Factor', y='Impact Score',
-                    title="Risk Factor Impact Analysis",
-                    color='Impact Score',
-                    color_continuous_scale='Reds')
-        fig.update_layout(xaxis_tickangle=-45)
-        st.plotly_chart(fig, use_container_width=True)
-
-    # High risk accounts
-    st.subheader("🚨 High Risk Accounts")
-
-    # Mock high risk accounts data
-    high_risk_accounts = pd.DataFrame({
-        'Account ID': ['ACC001234', 'ACC005678', 'ACC009012'],
-        'Customer Name': ['Customer A', 'Customer B', 'Customer C'],
-        'Risk Score': [0.92, 0.87, 0.83],
-        'Primary Risk': ['High Value Dormant', 'Compliance Violation', 'Operational Risk'],
-        'Balance (AED)': [125000, 87500, 245000],
-        'Last Contact': ['2021-03-15', '2020-11-22', '2022-01-08'],
-        'Status': ['Requires Immediate Action', 'Under Review', 'Monitoring']
-    })
-
-    # Style the dataframe
-    def highlight_risk_score(val):
-        if val >= 0.9:
-            return 'background-color: #f8d7da'
-        elif val >= 0.8:
-            return 'background-color: #fff3cd'
-        return ''
-
-    styled_df = high_risk_accounts.style.applymap(highlight_risk_score, subset=['Risk Score'])
-    st.dataframe(styled_df, use_container_width=True)
-
-    # Risk trends over time
-    st.subheader("📈 Risk Trends")
-
-    # Generate risk trend data
-    dates = pd.date_range(start='2024-01-01', end='2024-12-01', freq='W')
-    risk_trends = pd.DataFrame({
-        'Date': dates,
-        'Overall_Risk': np.random.uniform(0.15, 0.35, len(dates)),
-        'High_Value_Risk': np.random.uniform(0.25, 0.45, len(dates)),
-        'Compliance_Risk': np.random.uniform(0.10, 0.30, len(dates)),
-        'Operational_Risk': np.random.uniform(0.05, 0.25, len(dates))
-    })
-
-    fig = px.line(risk_trends, x='Date',
-                 y=['Overall_Risk', 'High_Value_Risk', 'Compliance_Risk', 'Operational_Risk'],
-                 title="Risk Score Trends Over Time")
-    fig.update_layout(yaxis_title="Risk Score", height=400)
-    st.plotly_chart(fig, use_container_width=True)
-
-    # Risk mitigation actions
-    st.subheader("🛡️ Risk Mitigation Actions")
-
-    mitigation_actions = [
-        {
-            "Priority": "Critical",
-            "Action": "Contact high-value dormant account holders",
-            "Target Date": "2024-12-15",
-            "Owner": "Customer Relations Team",
-            "Status": "In Progress"
-        },
-        {
-            "Priority": "High",
-            "Action": "Review compliance violation procedures",
-            "Target Date": "2024-12-20",
-            "Owner": "Compliance Team",
-            "Status": "Not Started"
-        },
-        {
-            "Priority": "Medium",
-            "Action": "Update operational risk controls",
-            "Target Date": "2024-12-31",
-            "Owner": "Risk Management",
-            "Status": "Planning"
-        }
-    ]
-
-    for action in mitigation_actions:
-        with st.container():
-            col1, col2, col3, col4, col5 = st.columns([1, 3, 2, 2, 2])
-
-            with col1:
-                if action["Priority"] == "Critical":
-                    st.error(f"🚨 {action['Priority']}")
-                elif action["Priority"] == "High":
-                    st.warning(f"⚠️ {action['Priority']}")
-                else:
-                    st.info(f"ℹ️ {action['Priority']}")
-
-            with col2:
-                st.markdown(f"**{action['Action']}**")
-
-            with col3:
-                st.text(f"Due: {action['Target Date']}")
-
-            with col4:
-                st.text(f"Owner: {action['Owner']}")
-
-            with col5:
-                if action["Status"] == "In Progress":
-                    st.success(f"✅ {action['Status']}")
-                elif action["Status"] == "Not Started":
-                    st.error(f"❌ {action['Status']}")
-                else:
-                    st.info(f"📋 {action['Status']}")
-
-            st.markdown("---")
-
-def show_notifications():
-    """Display notifications interface"""
-
-    st.markdown('<div class="main-header">📧 Notifications & Alerts</div>', unsafe_allow_html=True)
-
-    # Notification preferences
-    st.subheader("⚙️ Notification Preferences")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.markdown("**Channel Preferences:**")
-        email_enabled = st.checkbox("📧 Email Notifications", value=True)
-        slack_enabled = st.checkbox("💬 Slack Integration", value=False)
-        dashboard_enabled = st.checkbox("📊 Dashboard Alerts", value=True)
-        mobile_enabled = st.checkbox("📱 Mobile Push", value=False)
-
-    with col2:
-        st.markdown("**Alert Thresholds:**")
-        priority_threshold = st.selectbox(
-            "Minimum Priority Level",
-            ["Low", "Medium", "High", "Critical"],
-            index=1
-        )
-
-        quiet_hours = st.checkbox("🌙 Enable Quiet Hours", value=True)
-        if quiet_hours:
-            col1, col2 = st.columns(2)
-            with col1:
-                quiet_start = st.time_input("Quiet Hours Start", value=datetime.strptime("22:00", "%H:%M").time())
-            with col2:
-                quiet_end = st.time_input("Quiet Hours End", value=datetime.strptime("06:00", "%H:%M").time())
-
-    if st.button("💾 Save Preferences", type="primary"):
-        st.success("✅ Notification preferences saved!")
-
     st.markdown("---")
+    st.markdown("### 🤖 Active Compliance Agents")
+    st.caption("Only agents with violations > 0 are shown")
 
-    # Recent notifications
-    st.subheader("🔔 Recent Notifications")
+    # Filter and display agents with violations
+    active_agents = {k: v for k, v in results["compliance_agents"].items() if v["violations_found"] > 0}
 
-    # Notification filters
-    col1, col2, col3 = st.columns(3)
+    for agent_id, agent_info in active_agents.items():
+        with st.expander(f"⚖️ {agent_info['name']} - {agent_info['violations_found']} violations", expanded=False):
 
-    with col1:
-        filter_priority = st.selectbox("Filter by Priority", ["All", "Critical", "High", "Medium", "Low"])
-    with col2:
-        filter_type = st.selectbox("Filter by Type", ["All", "Compliance", "Risk", "System", "Dormancy"])
-    with col3:
-        filter_status = st.selectbox("Filter by Status", ["All", "Unread", "Read", "Acknowledged"])
-
-    # Mock notifications data
-    notifications = [
-        {
-            "timestamp": "2024-12-01 14:30",
-            "priority": "Critical",
-            "type": "Risk",
-            "title": "High-Value Dormant Account Alert",
-            "message": "Account ACC123456 with balance AED 150,000 has been dormant for 42 months",
-            "status": "Unread",
-            "actions": ["Contact Customer", "Escalate", "Mark as Reviewed"]
-        },
-        {
-            "timestamp": "2024-12-01 11:15",
-            "priority": "High",
-            "type": "Compliance",
-            "title": "Article 3.1 Compliance Issue",
-            "message": "15 accounts require contact attempts per CBUAE Article 3.1 requirements",
-            "status": "Read",
-            "actions": ["Generate Contact List", "Schedule Campaign", "Mark as Reviewed"]
-        },
-        {
-            "timestamp": "2024-12-01 09:45",
-            "priority": "Medium",
-            "type": "System",
-            "title": "Weekly Compliance Report Available",
-            "message": "Your weekly compliance analysis report has been generated and is ready for download",
-            "status": "Read",
-            "actions": ["Download Report", "Share Report", "Archive"]
-        },
-        {
-            "timestamp": "2024-11-30 16:20",
-            "priority": "High",
-            "type": "Dormancy",
-            "title": "Quarterly Dormancy Review",
-            "message": "Q4 dormancy analysis complete: 127 new dormant accounts identified",
-            "status": "Acknowledged",
-            "actions": ["View Details", "Export Data", "Create Action Plan"]
-        }
-    ]
-
-    # Apply filters
-    filtered_notifications = notifications
-    if filter_priority != "All":
-        filtered_notifications = [n for n in filtered_notifications if n["priority"] == filter_priority]
-    if filter_type != "All":
-        filtered_notifications = [n for n in filtered_notifications if n["type"] == filter_type]
-    if filter_status != "All":
-        filtered_notifications = [n for n in filtered_notifications if n["status"] == filter_status]
-
-    # Display notifications
-    for i, notification in enumerate(filtered_notifications):
-        with st.container():
-            # Header row
-            col1, col2, col3, col4 = st.columns([1, 3, 1, 1])
+            col1, col2 = st.columns([2, 1])
 
             with col1:
-                if notification["priority"] == "Critical":
-                    st.error(f"🚨 {notification['priority']}")
-                elif notification["priority"] == "High":
-                    st.warning(f"⚠️ {notification['priority']}")
-                elif notification["priority"] == "Medium":
-                    st.info(f"ℹ️ {notification['priority']}")
-                else:
-                    st.success(f"✅ {notification['priority']}")
+                st.markdown(f"**Description:** {agent_info['description']}")
+                st.markdown(f"**Category:** {agent_info['category']}")
+                st.markdown(f"**CBUAE Article:** {agent_info['article']}")
+                st.markdown(f"**Priority Level:** `{agent_info['priority']}`")
+
+                # Action summary
+                if 'actions' in agent_info:
+                    actions_df = agent_info['actions']
+                    avg_hours = actions_df['estimated_hours'].mean()
+                    urgent_actions = len(actions_df[actions_df['deadline_days'] <= 7])
+
+                    st.markdown(f"**Average Resolution Time:** {avg_hours:.1f} hours")
+                    st.markdown(f"**Urgent Actions (≤7 days):** {urgent_actions}")
 
             with col2:
-                st.markdown(f"**{notification['title']}**")
-                st.caption(f"{notification['type']} • {notification['timestamp']}")
+                # Priority badge
+                priority_color = {
+                    "CRITICAL": "🔴",
+                    "HIGH": "🟠",
+                    "MEDIUM": "🟡",
+                    "LOW": "🟢"
+                }
+                st.markdown(f"### {priority_color.get(agent_info['priority'], '⚪')} {agent_info['priority']}")
+                st.metric("Violations Found", agent_info['violations_found'])
 
-            with col3:
-                if notification["status"] == "Unread":
-                    st.markdown("🔴 **Unread**")
-                elif notification["status"] == "Read":
-                    st.markdown("🔵 Read")
-                else:
-                    st.markdown("✅ Acknowledged")
-
-            with col4:
-                if st.button("⋯", key=f"actions_{i}", help="Actions"):
-                    st.write("Action menu would appear here")
-
-            # Message content
-            st.markdown(notification["message"])
-
-            # Action buttons
-            if notification["status"] == "Unread":
-                action_cols = st.columns(len(notification["actions"]) + 1)
-
-                for j, action in enumerate(notification["actions"]):
-                    with action_cols[j]:
-                        if st.button(action, key=f"action_{i}_{j}", size="sm"):
-                            st.success(f"✅ {action} executed!")
-
-                with action_cols[-1]:
-                    if st.button("✓ Mark Read", key=f"mark_read_{i}", size="sm"):
-                        st.success("✅ Marked as read!")
-
-            st.markdown("---")
-
-    if not filtered_notifications:
-        st.info("📭 No notifications match the current filters")
-
-    # Notification statistics
-    st.subheader("📊 Notification Statistics")
-
-    col1, col2, col3, col4 = st.columns(4)
-
-    with col1:
-        st.metric("Total Notifications", len(notifications))
-    with col2:
-        unread_count = len([n for n in notifications if n["status"] == "Unread"])
-        st.metric("Unread", unread_count)
-    with col3:
-        critical_count = len([n for n in notifications if n["priority"] == "Critical"])
-        st.metric("Critical Alerts", critical_count)
-    with col4:
-        today_count = len([n for n in notifications if n["timestamp"].startswith("2024-12-01")])
-        st.metric("Today", today_count)
-
-def show_system_admin():
-    """Display system administration interface"""
-
-    st.markdown('<div class="main-header">🔧 System Administration</div>', unsafe_allow_html=True)
-
-    # System status overview
-    st.subheader("🏥 System Health Overview")
-
-    # System components status
-    components = [
-        {"name": "Workflow Engine", "status": "Healthy", "uptime": "99.9%", "version": "1.0.0"},
-        {"name": "Memory Agent", "status": "Healthy", "uptime": "99.8%", "version": "1.0.0"},
-        {"name": "MCP Client", "status": "Connected", "uptime": "99.7%", "version": "1.0.0"},
-        {"name": "Data Processing Agent", "status": "Healthy", "uptime": "99.9%", "version": "1.0.0"},
-        {"name": "Dormancy Analysis Agent", "status": "Healthy", "uptime": "99.8%", "version": "1.0.0"},
-        {"name": "Compliance Agent", "status": "Healthy", "uptime": "99.6%", "version": "1.0.0"},
-        {"name": "Risk Assessment Agent", "status": "Healthy", "uptime": "99.7%", "version": "1.0.0"},
-        {"name": "Notification Agent", "status": "Healthy", "uptime": "99.5%", "version": "1.0.0"}
-    ]
-
-    # Display in a grid
-    cols = st.columns(2)
-    for i, component in enumerate(components):
-        with cols[i % 2]:
-            with st.container():
-                col1, col2, col3 = st.columns([2, 1, 1])
+            # Download buttons
+            if 'actions' in agent_info:
+                col1, col2 = st.columns(2)
 
                 with col1:
-                    if component["status"] in ["Healthy", "Connected"]:
-                        st.success(f"✅ {component['name']}")
-                    else:
-                        st.error(f"❌ {component['name']}")
-                    st.caption(f"Version: {component['version']}")
+                    create_download_button(
+                        agent_info['actions'],
+                        f"{agent_id}_compliance_actions",
+                        "📥 Download Actions"
+                    )
 
                 with col2:
-                    st.metric("Uptime", component["uptime"])
+                    # Create summary data
+                    summary_data = pd.DataFrame([{
+                        'Agent': agent_info['name'],
+                        'Category': agent_info['category'],
+                        'CBUAE_Article': agent_info['article'],
+                        'Violations_Found': agent_info['violations_found'],
+                        'Priority': agent_info['priority'],
+                        'Analysis_Date': results["analysis_timestamp"]
+                    }])
 
-                with col3:
-                    if st.button("🔄", key=f"restart_{i}", help="Restart Component"):
-                        st.success(f"🔄 {component['name']} restarted!")
+                    create_download_button(
+                        summary_data,
+                        f"{agent_id}_compliance_summary",
+                        "📄 Download Summary"
+                    )
+
+            # Show actions preview
+            if st.checkbox(f"👁️ Preview actions for {agent_info['name']}", key=f"compliance_preview_{agent_id}"):
+                if 'actions' in agent_info:
+                    st.dataframe(agent_info['actions'], use_container_width=True)
+
+
+def show_reports_page():
+    """Reports page showing all agents and comprehensive analytics"""
+    st.markdown('<div class="main-header">📋 Comprehensive Reports</div>', unsafe_allow_html=True)
+
+    # Report type selection
+    report_type = st.selectbox(
+        "Select Report Type:",
+        ["📊 Executive Dashboard", "🤖 Agent Performance", "📈 Trend Analysis", "📋 Regulatory Report"]
+    )
+
+    if report_type == "📊 Executive Dashboard":
+        show_executive_dashboard()
+    elif report_type == "🤖 Agent Performance":
+        show_agent_performance_report()
+    elif report_type == "📈 Trend Analysis":
+        show_trend_analysis()
+    elif report_type == "📋 Regulatory Report":
+        show_regulatory_report()
+
+
+def show_executive_dashboard():
+    """Executive dashboard with high-level metrics"""
+    st.markdown("## 📊 Executive Dashboard")
+
+    # High-level metrics
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        create_metric_card("Total Accounts", "125,456")
+    with col2:
+        create_metric_card("Dormant Accounts", "3,247", "↑ 2.1%")
+    with col3:
+        create_metric_card("Compliance Score", "94.2%", "↑ 1.8%")
+    with col4:
+        create_metric_card("Actions Pending", "157", "↓ 12")
+
+    # Charts
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("### 📈 Dormancy Trend (Last 12 Months)")
+
+        # Generate sample trend data
+        months = pd.date_range(start='2023-01-01', end='2023-12-31', freq='M')
+        dormant_counts = np.random.randint(2800, 3500, len(months))
+
+        fig = px.line(
+            x=months,
+            y=dormant_counts,
+            title="Monthly Dormant Account Count",
+            labels={'x': 'Month', 'y': 'Dormant Accounts'}
+        )
+        fig.update_layout(height=300)
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col2:
+        st.markdown("### 🎯 Compliance Status by Category")
+
+        categories = ['Contact & Communication', 'Process Management', 'Specialized Compliance',
+                      'Reporting & Retention']
+        compliance_scores = [92, 96, 89, 98]
+
+        fig = px.bar(
+            x=categories,
+            y=compliance_scores,
+            title="Compliance Scores by Category",
+            labels={'x': 'Category', 'y': 'Compliance Score (%)'},
+            color=compliance_scores,
+            color_continuous_scale='RdYlGn'
+        )
+        fig.update_layout(height=300)
+        st.plotly_chart(fig, use_container_width=True)
+
+
+def show_agent_performance_report():
+    """Detailed agent performance report"""
+    st.markdown("## 🤖 Agent Performance Report")
+
+    # All dormancy agents
+    st.markdown("### 💤 Dormancy Analysis Agents")
+
+    dormancy_agents_data = [
+        {"Agent": "Demand Deposit Dormancy", "Article": "2.1.1", "Accounts": 1247, "Actions": 15, "Status": "🟢 Active"},
+        {"Agent": "Fixed Deposit Dormancy", "Article": "2.2", "Accounts": 856, "Actions": 8, "Status": "🟢 Active"},
+        {"Agent": "Investment Account Dormancy", "Article": "2.3", "Accounts": 342, "Actions": 5, "Status": "🟢 Active"},
+        {"Agent": "Payment Instruments", "Article": "2.4", "Accounts": 123, "Actions": 3, "Status": "🟢 Active"},
+        {"Agent": "Safe Deposit Dormancy", "Article": "2.6", "Accounts": 67, "Actions": 2, "Status": "🟢 Active"},
+        {"Agent": "Contact Attempts", "Article": "5", "Accounts": 234, "Actions": 12, "Status": "🟡 Review"},
+        {"Agent": "CB Transfer Eligibility", "Article": "8.1", "Accounts": 89, "Actions": 89, "Status": "🔴 Critical"},
+        {"Agent": "High Value Dormant", "Article": "Internal", "Accounts": 45, "Actions": 45, "Status": "🔴 Critical"},
+    ]
+
+    dormancy_df = pd.DataFrame(dormancy_agents_data)
+    st.dataframe(dormancy_df, use_container_width=True)
+
+    # Download button for dormancy agents
+    create_download_button(dormancy_df, "dormancy_agents_report", "📥 Download Dormancy Agents Report")
 
     st.markdown("---")
 
-    # Performance metrics
-    st.subheader("📊 Performance Metrics")
+    # All compliance agents
+    st.markdown("### ⚖️ Compliance Analysis Agents")
+
+    compliance_agents_data = [
+        {"Agent": "Incomplete Contact Attempts", "Category": "Contact & Communication", "Article": "3.1, 5",
+         "Violations": 23, "Actions": 23, "Priority": "🔴 Critical"},
+        {"Agent": "Unflagged Dormant Candidates", "Category": "Contact & Communication", "Article": "2",
+         "Violations": 15, "Actions": 15, "Priority": "🟠 High"},
+        {"Agent": "Internal Ledger Candidates", "Category": "Process Management", "Article": "3.4, 3.5",
+         "Violations": 18, "Actions": 18, "Priority": "🟠 High"},
+        {"Agent": "Statement Freeze Candidates", "Category": "Process Management", "Article": "7.3", "Violations": 27,
+         "Actions": 27, "Priority": "🟡 Medium"},
+        {"Agent": "CBUAE Transfer Candidates", "Category": "Process Management", "Article": "8", "Violations": 12,
+         "Actions": 12, "Priority": "🔴 Critical"},
+    ]
+
+    compliance_df = pd.DataFrame(compliance_agents_data)
+    st.dataframe(compliance_df, use_container_width=True)
+
+    # Download button for compliance agents
+    create_download_button(compliance_df, "compliance_agents_report", "📥 Download Compliance Agents Report")
+
+
+def show_trend_analysis():
+    """Trend analysis with charts and insights"""
+    st.markdown("## 📈 Trend Analysis")
+
+    # Time period selection
+    col1, col2 = st.columns(2)
+    with col1:
+        start_date = st.date_input("Start Date", datetime.now() - timedelta(days=365))
+    with col2:
+        end_date = st.date_input("End Date", datetime.now())
+
+    # Generate sample trend data
+    date_range = pd.date_range(start=start_date, end=end_date, freq='M')
+
+    # Dormancy trends
+    st.markdown("### 💤 Dormancy Trends")
+
+    dormancy_data = pd.DataFrame({
+        'Month': date_range,
+        'New_Dormant': np.random.randint(50, 150, len(date_range)),
+        'Reactivated': np.random.randint(20, 80, len(date_range)),
+        'CB_Transfers': np.random.randint(5, 25, len(date_range))
+    })
+
+    fig = px.line(
+        dormancy_data.melt(id_vars=['Month'], var_name='Type', value_name='Count'),
+        x='Month', y='Count', color='Type',
+        title="Dormancy Activity Trends"
+    )
+    fig.update_layout(height=400)
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def show_regulatory_report():
+    """CBUAE regulatory compliance report"""
+    st.markdown("## 📋 CBUAE Regulatory Compliance Report")
+
+    # Report period
+    col1, col2 = st.columns(2)
+    with col1:
+        report_quarter = st.selectbox("Report Quarter", ["Q1 2024", "Q2 2024", "Q3 2024", "Q4 2024"])
+    with col2:
+        report_format = st.selectbox("Report Format", ["Detailed", "Summary", "Executive"])
+
+    # CBUAE Article compliance
+    st.markdown("### 📜 CBUAE Article Compliance Summary")
+
+    article_compliance = [
+        {"Article": "2.1.1", "Description": "Demand Deposit Dormancy", "Accounts": 1247, "Compliance": "✅ 100%",
+         "Status": "Compliant"},
+        {"Article": "2.2", "Description": "Fixed Deposit Dormancy", "Accounts": 856, "Compliance": "✅ 100%",
+         "Status": "Compliant"},
+        {"Article": "2.3", "Description": "Investment Account Dormancy", "Accounts": 342, "Compliance": "✅ 100%",
+         "Status": "Compliant"},
+        {"Article": "8", "Description": "Central Bank Transfer", "Accounts": 89, "Compliance": "🔴 85%",
+         "Status": "Action Required"},
+    ]
+
+    article_df = pd.DataFrame(article_compliance)
+    st.dataframe(article_df, use_container_width=True)
+
+    # Summary statistics
+    st.markdown("### 📊 Report Summary")
 
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        st.metric("CPU Usage", "23%", delta="-5%", delta_color="inverse")
+        create_metric_card("Overall Compliance", "96.8%")
     with col2:
-        st.metric("Memory Usage", "1.2 GB", delta="0.1 GB")
+        create_metric_card("Articles Monitored", "9")
     with col3:
-        st.metric("Active Sessions", "47", delta="3")
+        create_metric_card("Total Accounts", "3,381")
     with col4:
-        st.metric("Response Time", "245ms", delta="-15ms", delta_color="inverse")
+        create_metric_card("Actions Required", "23")
 
-    # Performance charts
-    col1, col2 = st.columns(2)
 
-    with col1:
-        # CPU and Memory usage over time
-        times = pd.date_range(start='2024-12-01 00:00', end='2024-12-01 23:59', freq='H')
-        perf_data = pd.DataFrame({
-            'Time': times,
-            'CPU_Usage': np.random.uniform(15, 35, len(times)),
-            'Memory_Usage': np.random.uniform(0.8, 1.5, len(times))
-        })
+def show_settings_page():
+    """Settings and configuration page"""
+    st.markdown('<div class="main-header">⚙️ System Settings</div>', unsafe_allow_html=True)
 
-        fig = px.line(perf_data, x='Time', y=['CPU_Usage', 'Memory_Usage'],
-                     title="System Resource Usage (24h)")
-        fig.update_layout(height=300)
-        st.plotly_chart(fig, use_container_width=True)
+    tab1, tab2, tab3, tab4 = st.tabs(["🔧 Agent Configuration", "📊 Thresholds", "🔗 Integrations", "👤 User Management"])
 
-    with col2:
-        # Response time distribution
-        response_times = np.random.gamma(2, 50, 200)
+    with tab1:
+        st.markdown("### 🤖 Agent Configuration")
 
-        fig = px.histogram(x=response_times, nbins=20,
-                          title="Response Time Distribution",
-                          labels={'x': 'Response Time (ms)', 'y': 'Frequency'})
-        fig.update_layout(height=300)
-        st.plotly_chart(fig, use_container_width=True)
-
-    # Configuration management
-    st.subheader("⚙️ System Configuration")
-
-    with st.expander("🔧 Agent Configuration"):
+        st.markdown("#### Dormancy Agents")
         col1, col2 = st.columns(2)
-
         with col1:
-            st.markdown("**Data Processing Agent:**")
-            max_file_size = st.number_input("Max File Size (MB)", value=50)
-            quality_threshold = st.slider("Quality Threshold", 0.0, 1.0, 0.8)
-            auto_validation = st.checkbox("Auto Validation", value=True)
-
+            st.checkbox("Enable Demand Deposit Agent", value=True)
+            st.checkbox("Enable Fixed Deposit Agent", value=True)
+            st.checkbox("Enable Investment Agent", value=True)
         with col2:
-            st.markdown("**Workflow Engine:**")
-            max_concurrent = st.number_input("Max Concurrent Workflows", value=10)
-            timeout_minutes = st.number_input("Workflow Timeout (minutes)", value=30)
-            auto_retry = st.checkbox("Auto Retry Failed Workflows", value=True)
+            st.checkbox("Enable Payment Instruments Agent", value=True)
+            st.checkbox("Enable Safe Deposit Agent", value=True)
+            st.checkbox("Enable Contact Attempts Agent", value=True)
 
-        if st.button("💾 Save Configuration"):
-            st.success("✅ Configuration saved successfully!")
-
-    with st.expander("🔐 Security Settings"):
+        st.markdown("#### Compliance Agents")
         col1, col2 = st.columns(2)
-
         with col1:
-            session_timeout = st.number_input("Session Timeout (minutes)", value=480)
-            max_login_attempts = st.number_input("Max Login Attempts", value=5)
-            require_2fa = st.checkbox("Require Two-Factor Authentication", value=False)
+            st.checkbox("Enable Contact Compliance Agent", value=True)
+            st.checkbox("Enable Ledger Transfer Agent", value=True)
+            st.checkbox("Enable Statement Freeze Agent", value=True)
+        with col2:
+            st.checkbox("Enable CBUAE Transfer Agent", value=True)
+            st.checkbox("Enable FX Conversion Agent", value=True)
+            st.checkbox("Enable Record Retention Agent", value=True)
+
+    with tab2:
+        st.markdown("### 📊 Compliance Thresholds")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.number_input("Dormancy Period (months)", min_value=12, max_value=60, value=36)
+            st.number_input("High Value Threshold (AED)", min_value=1000, max_value=1000000, value=100000)
+            st.number_input("Contact Attempts Required", min_value=1, max_value=10, value=3)
 
         with col2:
-            password_complexity = st.selectbox("Password Complexity", ["Basic", "Standard", "High"])
-            audit_logging = st.checkbox("Enable Audit Logging", value=True)
-            encrypt_sensitive = st.checkbox("Encrypt Sensitive Data", value=True)
+            st.number_input("CB Transfer Period (years)", min_value=3, max_value=10, value=5)
+            st.number_input("Statement Freeze Threshold (AED)", min_value=100, max_value=10000, value=1000)
+            st.number_input("Record Retention Period (years)", min_value=5, max_value=15, value=7)
 
-        if st.button("🔒 Update Security Settings"):
-            st.success("✅ Security settings updated!")
+    with tab3:
+        st.markdown("### 🔗 System Integrations")
 
-    # System maintenance
-    st.subheader("🧹 System Maintenance")
+        st.markdown("#### Database Connections")
+        database_config = st.expander("Core Banking System", expanded=False)
+        with database_config:
+            col1, col2 = st.columns(2)
+            with col1:
+                st.text_input("Host", placeholder="prod-db.bank.local")
+                st.text_input("Database", placeholder="core_banking")
+                st.text_input("Username", placeholder="compliance_user")
+            with col2:
+                st.text_input("Port", placeholder="5432")
+                st.text_input("Schema", placeholder="accounts")
+                st.text_input("Password", type="password")
 
-    col1, col2, col3 = st.columns(3)
+        st.markdown("#### Agent Status")
+        st.write(f"**Data Agents Available:** {'✅ Yes' if DATA_AGENTS_AVAILABLE else '❌ No'}")
+        st.write(f"**Dormancy Agents Available:** {'✅ Yes' if DORMANCY_AGENTS_AVAILABLE else '❌ No'}")
+        st.write(f"**Compliance Agents Available:** {'✅ Yes' if COMPLIANCE_AGENTS_AVAILABLE else '❌ No'}")
+        st.write(f"**Demo Mode:** {'🧪 Active' if DEMO_MODE else '🏭 Production'}")
 
-    with col1:
-        st.markdown("**Database Maintenance:**")
-        if st.button("🗂️ Optimize Database", use_container_width=True):
-            with st.spinner("Optimizing database..."):
-                import time
-                time.sleep(2)
-                st.success("✅ Database optimized!")
+    with tab4:
+        st.markdown("### 👤 User Management")
 
-        if st.button("🧹 Clean Old Logs", use_container_width=True):
-            st.success("✅ Old logs cleaned!")
+        st.markdown("#### Current Session")
+        st.write(f"**User:** {st.session_state.get('username', 'Unknown')}")
+        st.write(f"**Role:** {st.session_state.get('user_role', 'Unknown')}")
+        st.write(f"**Login Time:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-    with col2:
-        st.markdown("**Memory Management:**")
-        if st.button("💾 Clear Cache", use_container_width=True):
-            st.success("✅ Cache cleared!")
-
-        if st.button("🔄 Restart Memory Agent", use_container_width=True):
-            st.success("✅ Memory agent restarted!")
-
-    with col3:
-        st.markdown("**System Updates:**")
-        if st.button("🔍 Check for Updates", use_container_width=True):
-            st.info("ℹ️ System is up to date!")
-
-        if st.button("📊 Generate Health Report", use_container_width=True):
-            st.success("✅ Health report generated!")
-
-    # Logs viewer
-    st.subheader("📜 System Logs")
-
-    log_type = st.selectbox("Log Type", ["Application", "Error", "Audit", "Performance"])
-    log_level = st.selectbox("Log Level", ["All", "INFO", "WARNING", "ERROR", "CRITICAL"])
-
-    # Mock log entries
-    mock_logs = [
-        {"timestamp": "2024-12-01 14:35:22", "level": "INFO", "component": "Workflow Engine", "message": "Workflow abc123 completed successfully"},
-        {"timestamp": "2024-12-01 14:30:15", "level": "WARNING", "component": "Memory Agent", "message": "Memory usage approaching threshold (85%)"},
-        {"timestamp": "2024-12-01 14:25:08", "level": "INFO", "component": "Data Processing", "message": "Processed 1,247 records in 2.3 seconds"},
-        {"timestamp": "2024-12-01 14:20:45", "level": "ERROR", "component": "MCP Client", "message": "Connection timeout to external service"},
-        {"timestamp": "2024-12-01 14:15:33", "level": "INFO", "component": "Compliance Agent", "message": "Compliance verification completed for 847 accounts"}
-    ]
-
-    # Display logs
-    for log in mock_logs:
-        col1, col2, col3, col4 = st.columns([2, 1, 2, 4])
+        st.markdown("#### Session Actions")
+        col1, col2, col3 = st.columns(3)
 
         with col1:
-            st.text(log["timestamp"])
+            if st.button("🔄 Reset Session", use_container_width=True):
+                # Reset session but keep authentication
+                keys_to_keep = ['authenticated', 'username', 'user_role']
+                keys_to_remove = [k for k in st.session_state.keys() if k not in keys_to_keep]
+                for key in keys_to_remove:
+                    del st.session_state[key]
+                initialize_session_state()
+                st.success("Session reset successful")
 
         with col2:
-            if log["level"] == "ERROR":
-                st.error(log["level"])
-            elif log["level"] == "WARNING":
-                st.warning(log["level"])
-            else:
-                st.success(log["level"])
+            if st.button("💾 Export Data", use_container_width=True):
+                if st.session_state.processed_data is not None:
+                    create_download_button(
+                        st.session_state.processed_data,
+                        "banking_compliance_data",
+                        "📥 Download Current Data"
+                    )
+                else:
+                    st.warning("No data to export")
 
         with col3:
-            st.text(log["component"])
+            if st.button("🚪 Logout", use_container_width=True):
+                logout()
 
-        with col4:
-            st.text(log["message"])
 
-def generate_analysis_report(results: Dict):
-    """Generate analysis report"""
-    st.success("📄 Generating comprehensive analysis report...")
-    # In a real implementation, this would generate a proper report
-    st.balloons()
-
-def send_notifications(results: Dict):
-    """Send notifications based on results"""
-    st.success("📧 Sending notifications to stakeholders...")
-    # In a real implementation, this would send actual notifications
-    st.balloons()
-
-def save_workflow_results(results: Dict):
-    """Save workflow results"""
-    st.success("💾 Workflow results saved successfully!")
-    # In a real implementation, this would save to database
-    st.balloons()
-
-# ========================= MAIN APPLICATION ENTRY POINT =========================
+# ===== MAIN APPLICATION =====
 
 def main():
-    """Main application entry point"""
+    """Main application function with enhanced error handling"""
+    # Check authentication first
+    if not check_authentication():
+        return
 
-    # Initialize authentication
-    init_auth()
+    # Initialize session state
+    initialize_session_state()
 
-    # Check authentication status
-    if not st.session_state.authenticated:
-        login_form()
-    else:
-        main_app()
+    # Show agent availability warnings
+    if not AGENTS_AVAILABLE:
+        st.warning("⚠️ Some agents are not available. Running in demo mode.")
+
+        with st.expander("🔧 Agent Status Details"):
+            st.write(f"**Data Processing Agents:** {'✅ Available' if DATA_AGENTS_AVAILABLE else '❌ Not Available'}")
+            st.write(f"**Dormancy Agents:** {'✅ Available' if DORMANCY_AGENTS_AVAILABLE else '❌ Not Available'}")
+            st.write(f"**Compliance Agents:** {'✅ Available' if COMPLIANCE_AGENTS_AVAILABLE else '❌ Not Available'}")
+
+            st.info("""
+            **To enable full functionality:**
+            1. Ensure all agent modules are properly installed
+            2. Check the agents/ directory structure
+            3. Verify all required dependencies are installed
+            """)
+
+    # Show sidebar and get current page
+    current_page = show_sidebar()
+
+    # Route to appropriate page with error handling
+    try:
+        if current_page == "📊 Dashboard":
+            show_dashboard()
+        elif current_page == "📁 Data Processing":
+            show_data_processing_page()
+        elif current_page == "💤 Dormancy Analysis":
+            show_dormancy_analysis_page()
+        elif current_page == "⚖️ Compliance Analysis":
+            show_compliance_analysis_page()
+        elif current_page == "📋 Reports":
+            show_reports_page()
+        elif current_page == "⚙️ Settings":
+            show_settings_page()
+        else:
+            # Default fallback to dashboard
+            st.warning(f"Unknown page: {current_page}. Redirecting to dashboard.")
+            show_dashboard()
+
+    except NameError as e:
+        st.error(f"❌ Function not found: {str(e)}")
+        st.info("🔧 This indicates a missing function definition in your app.py file.")
+
+        # Show available functions for debugging
+        with st.expander("🛠️ Debug Info"):
+            available_functions = [name for name in globals() if callable(globals()[name]) and name.startswith('show_')]
+            st.write("**Available page functions:**")
+            for func in available_functions:
+                st.write(f"• {func}")
+
+        # Fallback to a basic page
+        st.markdown("### 🏦 Banking Compliance System")
+        st.info("Please check the application setup and ensure all page functions are properly defined.")
+
+    except Exception as e:
+        st.error(f"❌ Application error: {str(e)}")
+        st.info("Please contact your system administrator.")
+
+        # Show error details in debug mode
+        if st.checkbox("🐛 Show detailed error"):
+            import traceback
+            st.code(traceback.format_exc())
+
+    # Footer
+    st.markdown("---")
+    st.markdown("""
+    <div style='text-align: center; color: #666; padding: 1rem;'>
+        <p>🏦 Banking Compliance Analysis System v2.0 | 
+        Powered by AI Agents | 
+        CBUAE Compliant | 
+        © 2024 Banking Compliance Solutions</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+# ===== RUN APPLICATION =====
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        st.error(f"❌ Critical application error: {str(e)}")
+        st.info("The application failed to start. Please check your configuration.")
+
+        # Emergency debug mode
+        if st.button("🚨 Emergency Debug Mode"):
+            st.code(f"""
+Error: {str(e)}
+
+App Configuration:
+- Demo Mode: {DEMO_MODE if 'DEMO_MODE' in globals() else 'Unknown'}
+- Data Agents: {DATA_AGENTS_AVAILABLE if 'DATA_AGENTS_AVAILABLE' in globals() else 'Unknown'}
+- Dormancy Agents: {DORMANCY_AGENTS_AVAILABLE if 'DORMANCY_AGENTS_AVAILABLE' in globals() else 'Unknown'}
+- Compliance Agents: {COMPLIANCE_AGENTS_AVAILABLE if 'COMPLIANCE_AGENTS_AVAILABLE' in globals() else 'Unknown'}
+- Session State Keys: {list(st.session_state.keys()) if hasattr(st, 'session_state') else 'Not available'}
+- Available Functions: {[name for name in globals() if callable(globals()[name]) and name.startswith('show_')]}
+""")
+
+# ===== EXPORT DEFINITIONS =====
+
+__all__ = [
+    "main",
+    "show_dashboard",
+    "show_data_processing_page",
+    "show_dormancy_analysis_page",
+    "show_compliance_analysis_page",
+    "show_reports_page",
+    "show_settings_page",
+    "check_authentication",
+    "initialize_session_state",
+    "create_download_button",
+    "format_number",
+    "create_metric_card"
+]
