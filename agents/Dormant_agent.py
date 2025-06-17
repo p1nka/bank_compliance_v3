@@ -1,3 +1,9 @@
+"""
+agents/dormancy_agents.py - Updated Dormancy Analysis Agents
+Aligned with actual CSV column names from banking_compliance_dataset
+Comprehensive CBUAE compliance monitoring with exact field mapping
+"""
+
 import logging
 import pandas as pd
 import asyncio
@@ -7,6 +13,7 @@ from dataclasses import dataclass, asdict
 from enum import Enum
 import secrets
 import json
+import numpy as np
 
 # LangGraph and LangSmith imports
 from langgraph.graph import StateGraph, END, START
@@ -24,20 +31,42 @@ except ImportError:
         async def call_tool(self, tool_name: str, params: Dict) -> Dict:
             return {"success": True, "data": {}}
 
-# Import comprehensive dormancy monitoring system
-from dormant import (
-    DormancyMonitoringAgents,
-    DormancyReportingEngine,
-    DormancyNotificationService,
-    initialize_dormancy_monitoring_system,
-    run_daily_dormancy_monitoring
-)
+# Import error handler and memory agent
+try:
+    from agents.error_handler_agent import ErrorHandlerAgent, ErrorState
+    from agents.memory_agent import MemoryBucket, MemoryPriority, MemoryContext
+except ImportError:
+    # Mock implementations for testing
+    class ErrorState:
+        def __init__(self, **kwargs):
+            for k, v in kwargs.items():
+                setattr(self, k, v)
 
-# Import error handler
-from agents.error_handler_agent import ErrorHandlerAgent, ErrorState
 
-# Import memory agent components
-from agents.memory_agent import MemoryBucket, MemoryPriority, MemoryContext
+    class ErrorHandlerAgent:
+        def __init__(self, memory_agent, mcp_client):
+            pass
+
+        async def handle_workflow_error(self, error_state):
+            return type('obj', (object,), {
+                'recovery_action': 'continue',
+                'recovery_success': True
+            })()
+
+
+    class MemoryBucket:
+        KNOWLEDGE = "knowledge"
+        SESSION = "session"
+        AUDIT = "audit"
+
+
+    class MemoryPriority:
+        HIGH = "high"
+        CRITICAL = "critical"
+
+
+    class MemoryContext:
+        pass
 
 # Configure logging
 logging.basicConfig(
@@ -69,7 +98,7 @@ class DormancyStatus(Enum):
 
 
 class DormancyTrigger(Enum):
-    """Triggers for dormancy analysis"""
+    """Triggers for dormancy analysis based on CSV columns"""
     STANDARD_INACTIVITY = "standard_inactivity"
     PAYMENT_INSTRUMENT_UNCLAIMED = "payment_instrument_unclaimed"
     SDB_UNPAID_FEES = "sdb_unpaid_fees"
@@ -87,11 +116,13 @@ class DormancyTrigger(Enum):
     STATEMENT_SUPPRESSION = "statement_suppression"
     FOREIGN_CURRENCY_CONVERSION = "foreign_currency_conversion"
     SDB_COURT_APPLICATION = "sdb_court_application"
+    UNCLAIMED_INSTRUMENTS_LEDGER = "unclaimed_instruments_ledger"
+    CBUAE_TRANSFER_READY = "cbuae_transfer_ready"
 
 
 @dataclass
 class DormancyAnalysisState:
-    """Main state for dormancy analysis workflow - used by workflow engine"""
+    """Main state for dormancy analysis workflow - using CSV column names"""
 
     session_id: str
     user_id: str
@@ -160,7 +191,7 @@ class DormancyAnalysisState:
 
 @dataclass
 class AgentState:
-    """Individual agent state with memory management"""
+    """Individual agent state with CSV column mapping"""
     agent_id: str
     agent_type: str
     session_id: str
@@ -225,25 +256,31 @@ class AgentState:
             self.performance_metrics = {}
 
 
-# Base Dormancy Agent Class with Memory Hooks and Comprehensive Monitoring
+# Mock Memory Agent for testing
+class MockMemoryAgent:
+    """Mock memory agent for testing purposes"""
+
+    async def create_memory_context(self, user_id: str, session_id: str, agent_name: str):
+        return {"user_id": user_id, "session_id": session_id, "agent_name": agent_name}
+
+    async def retrieve_memory(self, bucket: str, filter_criteria: Dict, context: Dict):
+        return {"success": True, "data": []}
+
+    async def store_memory(self, bucket: str, data: Dict, context: Dict,
+                           content_type: str = None, priority: str = None,
+                           tags: List[str] = None, encrypt_sensitive: bool = False):
+        return {"success": True, "id": secrets.token_hex(8)}
+
+
+# Base Dormancy Agent Class using CSV column names
 class BaseDormancyAgent:
-    """Base class for all dormancy analysis agents with comprehensive CBUAE monitoring"""
+    """Base class for all dormancy analysis agents using exact CSV column names"""
 
-    def __init__(self, agent_type: str, memory_agent, mcp_client: MCPClient, db_connection=None):
+    def __init__(self, agent_type: str, memory_agent=None, mcp_client: MCPClient = None, db_connection=None):
         self.agent_type = agent_type
-        self.memory_agent = memory_agent
-        self.mcp_client = mcp_client
+        self.memory_agent = memory_agent or MockMemoryAgent()
+        self.mcp_client = mcp_client or MCPClient()
         self.db_connection = db_connection
-
-        # Initialize the comprehensive dormancy monitoring system
-        if db_connection:
-            self.dormancy_monitoring = DormancyMonitoringAgents(db_connection)
-            self.reporting_engine = DormancyReportingEngine(db_connection)
-            self.notification_service = DormancyNotificationService(db_connection)
-        else:
-            self.dormancy_monitoring = None
-            self.reporting_engine = None
-            self.notification_service = None
 
         # Initialize error handler
         self.error_handler = ErrorHandlerAgent(memory_agent, mcp_client)
@@ -264,50 +301,154 @@ class BaseDormancyAgent:
             "article_3_contact_wait_months": 3
         }
 
-        # Agent-specific trigger conditions
-        self.trigger_conditions = self._define_trigger_conditions()
+        # CSV column mappings
+        self.csv_columns = {
+            # Customer columns
+            'customer_id': 'customer_id',
+            'customer_type': 'customer_type',
+            'full_name_en': 'full_name_en',
+            'full_name_ar': 'full_name_ar',
+            'id_number': 'id_number',
+            'id_type': 'id_type',
+            'date_of_birth': 'date_of_birth',
+            'nationality': 'nationality',
 
-    def _define_trigger_conditions(self) -> Dict:
-        """Define agent-specific trigger conditions"""
-        return {
-            "data_availability": True,
-            "minimum_records": 1,
-            "required_columns": [],
-            "business_rules": []
+            # Address columns
+            'address_line1': 'address_line1',
+            'address_line2': 'address_line2',
+            'city': 'city',
+            'emirate': 'emirate',
+            'country': 'country',
+            'postal_code': 'postal_code',
+
+            # Contact columns
+            'phone_primary': 'phone_primary',
+            'phone_secondary': 'phone_secondary',
+            'email_primary': 'email_primary',
+            'email_secondary': 'email_secondary',
+            'address_known': 'address_known',
+            'last_contact_date': 'last_contact_date',
+            'last_contact_method': 'last_contact_method',
+
+            # KYC columns
+            'kyc_status': 'kyc_status',
+            'kyc_expiry_date': 'kyc_expiry_date',
+            'risk_rating': 'risk_rating',
+
+            # Account columns
+            'account_id': 'account_id',
+            'account_type': 'account_type',
+            'account_subtype': 'account_subtype',
+            'account_name': 'account_name',
+            'currency': 'currency',
+            'account_status': 'account_status',
+            'dormancy_status': 'dormancy_status',
+            'opening_date': 'opening_date',
+            'closing_date': 'closing_date',
+
+            # Transaction columns
+            'last_transaction_date': 'last_transaction_date',
+            'last_system_transaction_date': 'last_system_transaction_date',
+
+            # Balance columns
+            'balance_current': 'balance_current',
+            'balance_available': 'balance_available',
+            'balance_minimum': 'balance_minimum',
+            'interest_rate': 'interest_rate',
+            'interest_accrued': 'interest_accrued',
+
+            # Joint account columns
+            'is_joint_account': 'is_joint_account',
+            'joint_account_holders': 'joint_account_holders',
+            'has_outstanding_facilities': 'has_outstanding_facilities',
+
+            # Investment/FD columns
+            'maturity_date': 'maturity_date',
+            'auto_renewal': 'auto_renewal',
+
+            # Statement columns
+            'last_statement_date': 'last_statement_date',
+            'statement_frequency': 'statement_frequency',
+
+            # Dormancy tracking columns
+            'tracking_id': 'tracking_id',
+            'dormancy_trigger_date': 'dormancy_trigger_date',
+            'dormancy_period_start': 'dormancy_period_start',
+            'dormancy_period_months': 'dormancy_period_months',
+            'dormancy_classification_date': 'dormancy_classification_date',
+            'transfer_eligibility_date': 'transfer_eligibility_date',
+            'current_stage': 'current_stage',
+
+            # Contact attempt columns
+            'contact_attempts_made': 'contact_attempts_made',
+            'last_contact_attempt_date': 'last_contact_attempt_date',
+            'waiting_period_start': 'waiting_period_start',
+            'waiting_period_end': 'waiting_period_end',
+
+            # Transfer columns
+            'transferred_to_ledger_date': 'transferred_to_ledger_date',
+            'transferred_to_cb_date': 'transferred_to_cb_date',
+            'cb_transfer_amount': 'cb_transfer_amount',
+            'cb_transfer_reference': 'cb_transfer_reference',
+            'exclusion_reason': 'exclusion_reason',
+
+            # Audit columns
+            'created_date': 'created_date',
+            'updated_date': 'updated_date',
+            'updated_by': 'updated_by'
         }
 
-    @traceable(name="check_triggers")
-    async def check_triggers(self, state: AgentState) -> bool:
-        """Check if agent should be triggered using comprehensive monitoring"""
+    def _safe_date_parse(self, date_str: str) -> Optional[datetime]:
+        """Safely parse date strings from CSV"""
+        if pd.isna(date_str) or date_str == '' or date_str is None:
+            return None
+
         try:
-            # Check data availability
-            if not state.input_dataframe or state.input_dataframe.empty:
-                return False
+            if isinstance(date_str, str):
+                # Try common date formats
+                for fmt in ['%Y-%m-%d', '%d/%m/%Y', '%Y-%m-%d %H:%M:%S']:
+                    try:
+                        return datetime.strptime(date_str, fmt)
+                    except ValueError:
+                        continue
 
-            # Check minimum records
-            min_records = self.trigger_conditions.get("minimum_records", 1)
-            if len(state.input_dataframe) < min_records:
-                return False
-
-            # Check required columns
-            required_cols = self.trigger_conditions.get("required_columns", [])
-            if required_cols and not all(col in state.input_dataframe.columns for col in required_cols):
-                return False
-
-            # Agent-specific trigger logic
-            return await self._check_agent_specific_triggers(state)
-
+                # Use pandas if all else fails
+                return pd.to_datetime(date_str)
+            elif isinstance(date_str, datetime):
+                return date_str
+            else:
+                return pd.to_datetime(date_str)
         except Exception as e:
-            logger.error(f"Trigger check failed for {self.agent_type}: {str(e)}")
-            return False
+            logger.warning(f"Could not parse date '{date_str}': {e}")
+            return None
 
-    async def _check_agent_specific_triggers(self, state: AgentState) -> bool:
-        """Override in subclasses for agent-specific trigger logic"""
-        return True
+    def _calculate_years_since(self, date_str: str, reference_date: datetime = None) -> float:
+        """Calculate years since a given date"""
+        if not reference_date:
+            reference_date = datetime.now()
+
+        parsed_date = self._safe_date_parse(date_str)
+        if not parsed_date:
+            return 0.0
+
+        delta = reference_date - parsed_date
+        return delta.days / 365.25
+
+    def _calculate_months_since(self, date_str: str, reference_date: datetime = None) -> float:
+        """Calculate months since a given date"""
+        if not reference_date:
+            reference_date = datetime.now()
+
+        parsed_date = self._safe_date_parse(date_str)
+        if not parsed_date:
+            return 0.0
+
+        delta = reference_date - parsed_date
+        return delta.days / 30.44  # Average days per month
 
     @traceable(name="pre_analysis_memory_hook")
     async def pre_analysis_memory_hook(self, state: AgentState) -> AgentState:
-        """Enhanced pre-analysis memory hook with comprehensive monitoring context"""
+        """Enhanced pre-analysis memory hook"""
         try:
             state.agent_status = AgentStatus.MEMORY_LOADING
 
@@ -318,9 +459,9 @@ class BaseDormancyAgent:
                 agent_name=self.agent_type
             )
 
-            # Retrieve agent-specific patterns from comprehensive monitoring
+            # Retrieve agent-specific patterns
             agent_patterns = await self.memory_agent.retrieve_memory(
-                bucket=MemoryBucket.KNOWLEDGE.value,
+                bucket=MemoryBucket.KNOWLEDGE,
                 filter_criteria={
                     "type": f"{self.agent_type}_patterns",
                     "user_id": state.user_id,
@@ -336,57 +477,6 @@ class BaseDormancyAgent:
                 }
                 logger.info(f"Retrieved {len(agent_patterns['data'])} patterns for {self.agent_type}")
 
-            # Retrieve historical monitoring results
-            historical_monitoring = await self.memory_agent.retrieve_memory(
-                bucket=MemoryBucket.KNOWLEDGE.value,
-                filter_criteria={
-                    "type": f"{self.agent_type}_monitoring_history",
-                    "user_id": state.user_id,
-                    "content_type": "monitoring_results"
-                },
-                context=memory_context
-            )
-
-            if historical_monitoring.get("success") and historical_monitoring.get("data"):
-                state.pre_hook_memory["historical_monitoring"] = historical_monitoring["data"]
-
-            # Retrieve regulatory benchmarks from CBUAE standards
-            regulatory_benchmarks = await self.memory_agent.retrieve_memory(
-                bucket=MemoryBucket.KNOWLEDGE.value,
-                filter_criteria={
-                    "type": "cbuae_regulatory_benchmarks",
-                    "content_type": "compliance_standards",
-                    "agent_type": self.agent_type
-                },
-                context=memory_context
-            )
-
-            if regulatory_benchmarks.get("success") and regulatory_benchmarks.get("data"):
-                state.pre_hook_memory["regulatory_benchmarks"] = regulatory_benchmarks["data"]
-
-            # Store comprehensive monitoring configuration
-            if self.dormancy_monitoring:
-                monitoring_config = {
-                    "monitoring_enabled": True,
-                    "agent_type": self.agent_type,
-                    "regulatory_params": self.default_params,
-                    "monitoring_capabilities": self._get_monitoring_capabilities()
-                }
-
-                await self.memory_agent.store_memory(
-                    bucket=MemoryBucket.SESSION.value,
-                    data={
-                        "type": f"{self.agent_type}_monitoring_config",
-                        "agent_id": state.agent_id,
-                        "session_id": state.session_id,
-                        "config": monitoring_config,
-                        "timestamp": datetime.now().isoformat()
-                    },
-                    context=memory_context,
-                    content_type="monitoring_config",
-                    tags=[self.agent_type, "monitoring", "session"]
-                )
-
             state.agent_status = AgentStatus.PROCESSING
 
         except Exception as e:
@@ -398,7 +488,7 @@ class BaseDormancyAgent:
 
     @traceable(name="post_analysis_memory_hook")
     async def post_analysis_memory_hook(self, state: AgentState) -> AgentState:
-        """Enhanced post-analysis memory hook with comprehensive monitoring storage"""
+        """Enhanced post-analysis memory hook"""
         try:
             state.agent_status = AgentStatus.MEMORY_STORING
 
@@ -410,7 +500,7 @@ class BaseDormancyAgent:
             )
 
             # Store comprehensive monitoring results
-            if state.analysis_results and self.dormancy_monitoring:
+            if state.analysis_results:
                 monitoring_results = {
                     "type": f"{self.agent_type}_monitoring_results",
                     "agent_id": state.agent_id,
@@ -431,7 +521,7 @@ class BaseDormancyAgent:
                 }
 
                 await self.memory_agent.store_memory(
-                    bucket=MemoryBucket.SESSION.value,
+                    bucket=MemoryBucket.SESSION,
                     data=monitoring_results,
                     context=memory_context,
                     content_type="monitoring_results",
@@ -439,115 +529,11 @@ class BaseDormancyAgent:
                     tags=[self.agent_type, "monitoring", "cbuae_compliance"]
                 )
 
-            # Store regulatory compliance patterns
-            if state.pattern_analysis and state.agent_status == AgentStatus.COMPLETED:
-                compliance_patterns = {
-                    "type": f"{self.agent_type}_compliance_patterns",
-                    "user_id": state.user_id,
-                    "agent_type": self.agent_type,
-                    "cbuae_article": state.analysis_results.get("compliance_article"),
-                    "patterns": state.pattern_analysis,
-                    "regulatory_effectiveness": {
-                        "detection_accuracy": state.performance_metrics.get("accuracy_score", 0),
-                        "false_positive_rate": 0.0,  # Would be calculated from validation data
-                        "compliance_score": self._calculate_compliance_score(state),
-                        "regulatory_risk_level": self._assess_regulatory_risk(state)
-                    },
-                    "audit_trail": {
-                        "processing_time": state.processing_time,
-                        "records_analyzed": state.records_processed,
-                        "findings_generated": state.dormant_records_found,
-                        "validation_status": "passed"
-                    },
-                    "timestamp": datetime.now().isoformat()
-                }
-
-                pattern_result = await self.memory_agent.store_memory(
-                    bucket=MemoryBucket.KNOWLEDGE.value,
-                    data=compliance_patterns,
-                    context=memory_context,
-                    content_type="compliance_patterns",
-                    priority=MemoryPriority.CRITICAL,
-                    tags=[self.agent_type, "cbuae", "regulatory", "patterns"],
-                    encrypt_sensitive=True
-                )
-
-                if pattern_result.get("success"):
-                    state.stored_patterns = compliance_patterns
-
-            # Store audit trail for CBUAE reporting
-            if state.processed_dataframe is not None and not state.processed_dataframe.empty:
-                audit_data = {
-                    "type": f"{self.agent_type}_cbuae_audit",
-                    "agent_id": state.agent_id,
-                    "session_id": state.session_id,
-                    "regulatory_compliance": {
-                        "cbuae_article": state.analysis_results.get("compliance_article"),
-                        "regulation_version": "2024",
-                        "compliance_status": "compliant" if state.analysis_results.get("validation_passed",
-                                                                                       True) else "non_compliant",
-                        "findings_summary": {
-                            "total_accounts_reviewed": state.records_processed,
-                            "dormant_accounts_identified": state.dormant_records_found,
-                            "high_risk_accounts": self._count_high_risk_accounts(state),
-                            "immediate_actions_required": self._get_immediate_actions(state)
-                        }
-                    },
-                    "audit_trail": {
-                        "analysis_timestamp": datetime.now().isoformat(),
-                        "processing_duration": state.processing_time,
-                        "data_quality_assessment": state.performance_metrics.get("data_quality_score", 0),
-                        "monitoring_agent_version": "2024.1",
-                        "validation_checkpoints_passed": True
-                    },
-                    "timestamp": datetime.now().isoformat()
-                }
-
-                await self.memory_agent.store_memory(
-                    bucket=MemoryBucket.AUDIT.value,
-                    data=audit_data,
-                    context=memory_context,
-                    content_type="cbuae_audit_trail",
-                    priority=MemoryPriority.CRITICAL,
-                    tags=[self.agent_type, "audit", "cbuae", "regulatory"]
-                )
-
         except Exception as e:
             logger.error(f"{self.agent_type} post-analysis memory hook failed: {str(e)}")
             await self._handle_error(state, e, "post_analysis_memory_hook")
 
         return state
-
-    def _get_monitoring_capabilities(self) -> List[str]:
-        """Get monitoring capabilities for this agent type"""
-        base_capabilities = [
-            "dormancy_detection",
-            "regulatory_compliance",
-            "pattern_analysis",
-            "risk_assessment"
-        ]
-
-        # Add agent-specific capabilities
-        agent_capabilities = {
-            "demand_deposit_dormancy": ["article_2_1_1", "inactivity_monitoring", "liability_account_check"],
-            "fixed_deposit_dormancy": ["article_2_2", "maturity_monitoring", "auto_renewal_tracking"],
-            "investment_dormancy": ["article_2_3", "redemption_monitoring", "investment_tracking"],
-            "safe_deposit_dormancy": ["article_2_6", "fee_monitoring", "court_application_tracking"],
-            "unclaimed_instruments": ["article_2_4", "instrument_monitoring", "contact_attempt_tracking"],
-            "high_value_dormancy": ["threshold_monitoring", "priority_flagging"],
-            "cb_transfer_eligibility": ["article_8", "transfer_readiness", "address_verification"],
-            "article_3_process": ["article_3", "contact_process_monitoring", "ledger_transfer_tracking"],
-            "proactive_contact": ["article_5", "early_warning", "communication_tracking"],
-            "contact_attempts": ["article_3_1", "communication_verification", "method_tracking"],
-            "internal_ledger": ["article_3_4", "ledger_transfer", "balance_monitoring"],
-            "record_retention": ["article_3_9", "audit_compliance", "retention_monitoring"],
-            "claim_processing": ["article_4", "customer_claims", "processing_timeline"],
-            "statement_suppression": ["article_7_3", "statement_control", "dormant_flagging"],
-            "foreign_currency": ["article_8_5", "currency_conversion", "exchange_rate_tracking"],
-            "sdb_court_application": ["article_3_7", "court_process", "legal_compliance"]
-        }
-
-        return base_capabilities + agent_capabilities.get(self.agent_type, [])
 
     def _determine_priority_level(self, state: AgentState) -> str:
         """Determine priority level based on findings"""
@@ -557,67 +543,6 @@ class BaseDormancyAgent:
             return "medium"
         else:
             return "high"
-
-    def _calculate_compliance_score(self, state: AgentState) -> float:
-        """Calculate CBUAE compliance score"""
-        base_score = 1.0
-
-        # Deduct points for validation failures
-        if not state.analysis_results.get("validation_passed", True):
-            base_score -= 0.3
-
-        # Deduct points for processing errors
-        if state.error_log:
-            base_score -= 0.1 * len(state.error_log)
-
-        # Deduct points for data quality issues
-        data_quality = state.performance_metrics.get("data_quality_score", 1.0)
-        base_score *= data_quality
-
-        return max(0.0, min(1.0, base_score))
-
-    def _assess_regulatory_risk(self, state: AgentState) -> str:
-        """Assess regulatory risk level"""
-        if state.dormant_records_found == 0:
-            return "low"
-        elif state.dormant_records_found < 5:
-            return "medium"
-        elif state.dormant_records_found < 20:
-            return "high"
-        else:
-            return "critical"
-
-    def _count_high_risk_accounts(self, state: AgentState) -> int:
-        """Count high-risk accounts from analysis"""
-        if not state.processed_dataframe or state.processed_dataframe.empty:
-            return 0
-
-        # Count based on balance thresholds or other risk factors
-        high_risk_count = 0
-        if 'Current_Balance' in state.processed_dataframe.columns:
-            high_value_threshold = self.default_params.get("high_value_threshold_aed", 25000)
-            high_risk_count = len(state.processed_dataframe[
-                                      pd.to_numeric(state.processed_dataframe['Current_Balance'],
-                                                    errors='coerce').fillna(0) >= high_value_threshold
-                                      ])
-
-        return high_risk_count
-
-    def _get_immediate_actions(self, state: AgentState) -> List[str]:
-        """Get immediate actions required based on findings"""
-        actions = []
-
-        if state.dormant_records_found > 0:
-            actions.append(f"Review {state.dormant_records_found} dormant accounts identified")
-
-        if self._count_high_risk_accounts(state) > 0:
-            actions.append("Prioritize high-value dormant accounts for immediate attention")
-
-        if state.analysis_results.get("compliance_article"):
-            article = state.analysis_results["compliance_article"]
-            actions.append(f"Ensure CBUAE Article {article} compliance requirements are met")
-
-        return actions
 
     async def _handle_error(self, state: AgentState, error: Exception, stage: str):
         """Handle errors using error handler agent"""
@@ -638,159 +563,139 @@ class BaseDormancyAgent:
                 workflow_context=asdict(state)
             )
 
-            # Handle error using error handler
             error_result = await self.error_handler.handle_workflow_error(error_state)
 
-            # Update agent state based on error handling result
             state.error_state = error_result
             state.error_log.append({
                 "timestamp": datetime.now().isoformat(),
                 "stage": stage,
                 "error": str(error),
-                "recovery_action": error_result.recovery_action,
-                "recovery_success": error_result.recovery_success
+                "recovery_action": getattr(error_result, 'recovery_action', 'continue'),
+                "recovery_success": getattr(error_result, 'recovery_success', True)
             })
-
-            # Determine if agent should continue or fail
-            if error_result.recovery_action == "retry":
-                state.agent_status = AgentStatus.PROCESSING
-            elif error_result.recovery_action == "escalate":
-                state.agent_status = AgentStatus.FAILED
-            else:
-                state.agent_status = AgentStatus.FAILED
 
         except Exception as nested_error:
             logger.error(f"Error handling failed: {str(nested_error)}")
             state.agent_status = AgentStatus.FAILED
 
-    async def analyze_patterns(self, df: pd.DataFrame, analysis_results: Dict) -> Dict:
-        """Base pattern analysis using comprehensive monitoring insights"""
-        return {
-            "pattern_type": "base",
-            "insights": [],
-            "recommendations": [],
-            "effectiveness_metrics": {},
-            "cbuae_compliance": {
-                "article": analysis_results.get("compliance_article"),
-                "requirements_met": True,
-                "risk_level": "low"
-            }
-        }
+    async def analyze_dormancy(self, state: AgentState, report_date: str) -> AgentState:
+        """Base analyze_dormancy method - to be overridden by subclasses"""
+        raise NotImplementedError("Subclasses must implement analyze_dormancy")
 
 
-# Comprehensive CBUAE Article-Specific Agents
+# ===== CBUAE ARTICLE-SPECIFIC AGENTS USING CSV COLUMNS =====
 
-# Article 2.1.1 - Demand Deposit Dormancy Agent
 class DemandDepositDormancyAgent(BaseDormancyAgent):
-    """Specialized agent for demand deposit dormancy analysis (CBUAE Article 2.1.1)"""
+    """CBUAE Article 2.1.1 - Demand Deposit Dormancy Analysis using CSV columns"""
 
-    def __init__(self, memory_agent, mcp_client: MCPClient, db_connection=None):
+    def __init__(self, memory_agent=None, mcp_client: MCPClient = None, db_connection=None):
         super().__init__("demand_deposit_dormancy", memory_agent, mcp_client, db_connection)
-
-        self.trigger_conditions = {
-            "data_availability": True,
-            "minimum_records": 1,
-            "required_columns": [
-                "Account_ID", "Account_Type", "Date_Last_Cust_Initiated_Activity",
-                "Date_Last_Customer_Communication_Any_Type", "Customer_Has_Active_Liability_Account"
-            ],
-            "business_rules": [
-                "account_type_contains_demand_deposit",
-                "activity_date_within_range"
-            ]
-        }
-
-    async def _check_agent_specific_triggers(self, state: AgentState) -> bool:
-        """Check demand deposit specific triggers"""
-        if self.dormancy_monitoring:
-            # Use comprehensive monitoring system
-            alerts = self.dormancy_monitoring.check_demand_deposit_inactivity()
-            if alerts:
-                state.triggered_by = DormancyTrigger.STANDARD_INACTIVITY
-                return True
-
-        # Fallback to DataFrame analysis
-        try:
-            df = state.input_dataframe
-            demand_deposit_accounts = df[
-                df['Account_Type'].astype(str).str.contains("Current|Saving|Call", case=False, na=False)
-            ]
-
-            if not demand_deposit_accounts.empty:
-                state.triggered_by = DormancyTrigger.STANDARD_INACTIVITY
-                return True
-
-        except Exception as e:
-            logger.error(f"Demand deposit trigger check failed: {str(e)}")
-
-        return False
 
     @traceable(name="demand_deposit_analysis")
     async def analyze_dormancy(self, state: AgentState, report_date: str) -> AgentState:
-        """Analyze demand deposit dormancy with comprehensive monitoring"""
+        """Analyze demand deposit dormancy using actual CSV columns"""
         try:
             start_time = datetime.now()
             state.agent_status = AgentStatus.PROCESSING
 
-            if self.dormancy_monitoring:
-                # Use comprehensive monitoring system
-                alerts = self.dormancy_monitoring.check_demand_deposit_inactivity()
+            # Pre-analysis memory hook
+            state = await self.pre_analysis_memory_hook(state)
 
-                state.analysis_results = {
-                    "count": len(alerts),
-                    "description": "CBUAE Article 2.1.1 - Demand Deposit Inactivity Analysis",
-                    "details": [alert.__dict__ for alert in alerts],
-                    "compliance_article": "2.1.1",
-                    "analysis_date": report_date,
-                    "validation_passed": True,
-                    "key_findings": [],
-                    "alerts_generated": len(alerts) > 0
-                }
+            if state.input_dataframe is None or state.input_dataframe.empty:
+                raise ValueError("No input data provided for demand deposit analysis")
 
-                state.dormant_records_found = len(alerts)
-                state.records_processed = state.total_accounts_analyzed
+            df = state.input_dataframe.copy()
+            report_datetime = self._safe_date_parse(report_date) or datetime.now()
 
-                # Create DataFrame from alerts for pattern analysis
-                if alerts:
-                    alert_data = []
-                    for alert in alerts:
-                        alert_data.append({
-                            'Account_ID': alert.account_id,
-                            'Customer_ID': alert.customer_id,
-                            'Alert_Type': alert.alert_type,
-                            'Priority': alert.priority,
-                            'Message': alert.message,
-                            'Created_Date': alert.created_date
+            # Filter for demand deposits and current accounts
+            demand_deposits = df[
+                (df[self.csv_columns['account_type']].isin(['CURRENT', 'SAVINGS', 'Current', 'Savings'])) &
+                (df[self.csv_columns['account_status']] != 'CLOSED')
+                ].copy()
+
+            dormant_accounts = []
+
+            for idx, account in demand_deposits.iterrows():
+                try:
+                    # Check if account meets Article 2.1.1 criteria
+                    last_transaction = account[self.csv_columns['last_transaction_date']]
+                    last_contact = account[self.csv_columns['last_contact_date']]
+                    has_facilities = account[self.csv_columns['has_outstanding_facilities']]
+                    balance = account[self.csv_columns['balance_current']]
+
+                    # Calculate inactivity period
+                    years_since_transaction = self._calculate_years_since(last_transaction, report_datetime)
+                    years_since_contact = self._calculate_years_since(last_contact, report_datetime)
+
+                    # CBUAE Article 2.1.1 Logic:
+                    # No customer-initiated activity for 3+ years AND no outstanding liabilities
+                    is_dormant = (
+                            years_since_transaction >= self.default_params["standard_inactivity_years"] and
+                            (has_facilities != 'YES') and  # No outstanding facilities
+                            balance > 0  # Has positive balance
+                    )
+
+                    if is_dormant:
+                        dormant_accounts.append({
+                            'account_id': account[self.csv_columns['account_id']],
+                            'customer_id': account[self.csv_columns['customer_id']],
+                            'customer_name': account[self.csv_columns['full_name_en']],
+                            'account_type': account[self.csv_columns['account_type']],
+                            'balance_current': balance,
+                            'last_transaction_date': last_transaction,
+                            'years_inactive': round(years_since_transaction, 2),
+                            'last_contact_date': last_contact,
+                            'years_since_contact': round(years_since_contact, 2),
+                            'dormancy_trigger': 'STANDARD_INACTIVITY',
+                            'compliance_article': '2.1.1',
+                            'priority': 'HIGH' if balance > self.default_params[
+                                "high_value_threshold_aed"] else 'MEDIUM',
+                            'next_action': 'PROACTIVE_CONTACT_REQUIRED',
+                            'risk_factors': self._assess_risk_factors(account)
                         })
-                    state.processed_dataframe = pd.DataFrame(alert_data)
-                else:
-                    state.processed_dataframe = pd.DataFrame()
-            else:
-                # Fallback to basic analysis
-                state.analysis_results = {
-                    "count": 0,
-                    "description": "Monitoring system not available",
-                    "compliance_article": "2.1.1",
-                    "validation_passed": False
-                }
-                state.processed_dataframe = pd.DataFrame()
 
-            # Pattern analysis
-            state.agent_status = AgentStatus.ANALYZING_PATTERNS
-            state.pattern_analysis = await self.analyze_patterns(state.processed_dataframe, state.analysis_results)
+                except Exception as e:
+                    logger.warning(
+                        f"Error processing account {account.get(self.csv_columns['account_id'], 'unknown')}: {e}")
+                    continue
+
+            # Create analysis results
+            state.analysis_results = {
+                "count": len(dormant_accounts),
+                "description": "CBUAE Article 2.1.1 - Demand Deposit Inactivity Analysis",
+                "details": dormant_accounts,
+                "compliance_article": "2.1.1",
+                "analysis_date": report_date,
+                "validation_passed": True,
+                "key_findings": self._generate_demand_deposit_findings(dormant_accounts, len(demand_deposits)),
+                "alerts_generated": len(dormant_accounts) > 0,
+                "regulatory_requirements": [
+                    "Customer-initiated activity tracking for 3+ years",
+                    "Outstanding liability verification required",
+                    "Proactive customer contact required before classification",
+                    "High-value accounts require immediate attention"
+                ]
+            }
+
+            state.dormant_records_found = len(dormant_accounts)
+            state.records_processed = len(demand_deposits)
+            state.processed_dataframe = pd.DataFrame(dormant_accounts) if dormant_accounts else pd.DataFrame()
 
             # Performance metrics
             processing_time = (datetime.now() - start_time).total_seconds()
             state.processing_time = processing_time
             state.performance_metrics = {
                 "processing_time_seconds": processing_time,
-                "alerts_generated": state.dormant_records_found,
-                "monitoring_system_available": self.dormancy_monitoring is not None,
-                "compliance_score": self._calculate_compliance_score(state),
-                "regulatory_risk": self._assess_regulatory_risk(state)
+                "accounts_analyzed": len(demand_deposits),
+                "dormant_accounts_found": len(dormant_accounts),
+                "high_value_accounts": len([a for a in dormant_accounts if a['priority'] == 'HIGH']),
+                "data_quality_score": self._calculate_data_quality_score(demand_deposits)
             }
 
             state.agent_status = AgentStatus.COMPLETED
+
+            # Post-analysis memory hook
+            state = await self.post_analysis_memory_hook(state)
 
         except Exception as e:
             state.agent_status = AgentStatus.FAILED
@@ -798,101 +703,284 @@ class DemandDepositDormancyAgent(BaseDormancyAgent):
 
         return state
 
-    async def analyze_patterns(self, df: pd.DataFrame, analysis_results: Dict) -> Dict:
-        """Analyze demand deposit patterns with CBUAE compliance focus"""
-        patterns = {
-            "pattern_type": "demand_deposit",
-            "cbuae_article": "2.1.1",
-            "regulatory_focus": "customer_initiated_activity_tracking",
-            "insights": [],
-            "recommendations": [],
-            "compliance_assessment": {
-                "requirements_met": True,
-                "risk_level": "low",
-                "immediate_actions": []
-            }
-        }
+    def _assess_risk_factors(self, account: pd.Series) -> List[str]:
+        """Assess risk factors for demand deposit account"""
+        risk_factors = []
 
-        if not df.empty:
-            patterns["insights"].append(f"Identified {len(df)} demand deposit dormancy alerts")
+        try:
+            balance = account[self.csv_columns['balance_current']]
+            customer_type = account[self.csv_columns['customer_type']]
+            risk_rating = account[self.csv_columns['risk_rating']]
+            address_known = account[self.csv_columns['address_known']]
 
-            if 'Priority' in df.columns:
-                high_priority = len(df[df['Priority'] == 'HIGH'])
-                if high_priority > 0:
-                    patterns["insights"].append(
-                        f"{high_priority} high-priority dormancy cases require immediate attention")
-                    patterns["compliance_assessment"]["risk_level"] = "high"
-                    patterns["compliance_assessment"]["immediate_actions"].append(
-                        "Review high-priority dormant accounts within 48 hours")
+            if balance > self.default_params["high_value_threshold_aed"]:
+                risk_factors.append("HIGH_VALUE_ACCOUNT")
 
-            patterns["recommendations"].extend([
-                "Implement proactive customer contact procedures per CBUAE Article 3",
-                "Verify customer communication channels are up to date",
-                "Review liability account relationships for dormant customers"
-            ])
+            if customer_type == 'CORPORATE':
+                risk_factors.append("CORPORATE_CUSTOMER")
 
-        return patterns
+            if risk_rating == 'HIGH':
+                risk_factors.append("HIGH_RISK_CUSTOMER")
+
+            if address_known != 'YES':
+                risk_factors.append("ADDRESS_UNKNOWN")
+
+            # Check for foreign currency
+            if account[self.csv_columns['currency']] != 'AED':
+                risk_factors.append("FOREIGN_CURRENCY")
+
+        except Exception as e:
+            logger.warning(f"Risk assessment failed: {e}")
+
+        return risk_factors
+
+    def _generate_demand_deposit_findings(self, dormant_accounts: List[Dict], total_accounts: int) -> List[str]:
+        """Generate key findings for demand deposits"""
+        findings = []
+
+        if dormant_accounts:
+            high_value_count = len([a for a in dormant_accounts if a['priority'] == 'HIGH'])
+            corporate_count = len([a for a in dormant_accounts if 'CORPORATE_CUSTOMER' in a.get('risk_factors', [])])
+
+            findings.append(
+                f"Found {len(dormant_accounts)} demand deposit accounts meeting Article 2.1.1 dormancy criteria")
+            findings.append(f"Analyzed {total_accounts} total demand deposit accounts")
+
+            if high_value_count > 0:
+                findings.append(f"{high_value_count} high-value accounts (>AED 25,000) require immediate attention")
+
+            if corporate_count > 0:
+                findings.append(f"{corporate_count} corporate accounts identified - enhanced due diligence required")
+
+            # Calculate average inactivity period
+            avg_inactivity = sum(a['years_inactive'] for a in dormant_accounts) / len(dormant_accounts)
+            findings.append(f"Average inactivity period: {avg_inactivity:.1f} years")
+
+            findings.append("Proactive customer contact campaigns should be initiated immediately")
+            findings.append("Liability verification required before dormancy classification")
+        else:
+            findings.append("No demand deposit accounts currently meet Article 2.1.1 dormancy criteria")
+            findings.append(f"Analyzed {total_accounts} accounts - all show recent customer activity")
+
+        return findings
+
+    def _calculate_data_quality_score(self, df: pd.DataFrame) -> float:
+        """Calculate data quality score for the dataset"""
+        if df.empty:
+            return 0.0
+
+        try:
+            # Key fields for dormancy analysis
+            key_fields = [
+                self.csv_columns['last_transaction_date'],
+                self.csv_columns['account_status'],
+                self.csv_columns['balance_current'],
+                self.csv_columns['has_outstanding_facilities']
+            ]
+
+            total_cells = len(df) * len(key_fields)
+            missing_cells = 0
+
+            for field in key_fields:
+                if field in df.columns:
+                    missing_cells += df[field].isna().sum()
+                else:
+                    missing_cells += len(df)  # Field completely missing
+
+            quality_score = max(0.0, (total_cells - missing_cells) / total_cells)
+            return round(quality_score, 3)
+
+        except Exception as e:
+            logger.warning(f"Data quality calculation failed: {e}")
+            return 0.5  # Default score
 
 
-# Article 2.2 - Fixed Deposit Dormancy Agent
 class FixedDepositDormancyAgent(BaseDormancyAgent):
-    """Specialized agent for fixed deposit dormancy analysis (CBUAE Article 2.2)"""
+    """CBUAE Article 2.2 - Fixed Deposit Dormancy Analysis using CSV columns"""
 
-    def __init__(self, memory_agent, mcp_client: MCPClient, db_connection=None):
+    def __init__(self, memory_agent=None, mcp_client: MCPClient = None, db_connection=None):
         super().__init__("fixed_deposit_dormancy", memory_agent, mcp_client, db_connection)
 
-    async def _check_agent_specific_triggers(self, state: AgentState) -> bool:
-        """Check fixed deposit specific triggers"""
-        if self.dormancy_monitoring:
-            alerts = self.dormancy_monitoring.check_fixed_deposit_inactivity()
-            if alerts:
-                state.triggered_by = DormancyTrigger.FIXED_DEPOSIT_MATURITY
-                return True
-        return False
-
+    @traceable(name="fixed_deposit_analysis")
     async def analyze_dormancy(self, state: AgentState, report_date: str) -> AgentState:
-        """Analyze fixed deposit dormancy"""
+        """Analyze fixed deposit dormancy using actual CSV columns"""
         try:
             start_time = datetime.now()
             state.agent_status = AgentStatus.PROCESSING
 
-            if self.dormancy_monitoring:
-                alerts = self.dormancy_monitoring.check_fixed_deposit_inactivity()
+            state = await self.pre_analysis_memory_hook(state)
 
-                state.analysis_results = {
-                    "count": len(alerts),
-                    "description": "CBUAE Article 2.2 - Fixed Deposit Maturity Analysis",
-                    "compliance_article": "2.2",
-                    "analysis_date": report_date,
-                    "validation_passed": True
-                }
+            if state.input_dataframe is None or state.input_dataframe.empty:
+                raise ValueError("No input data provided for fixed deposit analysis")
 
-                state.dormant_records_found = len(alerts)
+            df = state.input_dataframe.copy()
+            report_datetime = self._safe_date_parse(report_date) or datetime.now()
+
+            # Filter for fixed deposits and investment accounts
+            fixed_deposits = df[
+                (df[self.csv_columns['account_type']].isin(
+                    ['INVESTMENT', 'Investment', 'FIXED_DEPOSIT', 'Fixed Deposit'])) &
+                (df[self.csv_columns['account_status']] != 'CLOSED')
+                ].copy()
+
+            dormant_accounts = []
+
+            for idx, account in fixed_deposits.iterrows():
+                try:
+                    maturity_date = account[self.csv_columns['maturity_date']]
+                    auto_renewal = account[self.csv_columns['auto_renewal']]
+                    last_contact = account[self.csv_columns['last_contact_date']]
+                    balance = account[self.csv_columns['balance_current']]
+
+                    # Parse maturity date
+                    maturity_datetime = self._safe_date_parse(maturity_date)
+
+                    if maturity_datetime:
+                        years_since_maturity = self._calculate_years_since(maturity_date, report_datetime)
+                        years_since_contact = self._calculate_years_since(last_contact, report_datetime)
+
+                        # CBUAE Article 2.2 Logic:
+                        # Fixed deposits with no customer communication post-maturity
+                        is_dormant = False
+                        dormancy_reason = ""
+
+                        if auto_renewal == 'YES':
+                            # Auto-renewal FDs: Check for communication gaps
+                            if years_since_contact >= self.default_params["standard_inactivity_years"]:
+                                is_dormant = True
+                                dormancy_reason = "AUTO_RENEWAL_NO_CONTACT"
+                        else:
+                            # Non-auto-renewal FDs: Check maturity + inactivity
+                            if (years_since_maturity >= self.default_params["standard_inactivity_years"] and
+                                    years_since_contact >= self.default_params["standard_inactivity_years"]):
+                                is_dormant = True
+                                dormancy_reason = "MATURED_UNCLAIMED"
+
+                        if is_dormant and balance > 0:
+                            dormant_accounts.append({
+                                'account_id': account[self.csv_columns['account_id']],
+                                'customer_id': account[self.csv_columns['customer_id']],
+                                'customer_name': account[self.csv_columns['full_name_en']],
+                                'account_type': account[self.csv_columns['account_type']],
+                                'balance_current': balance,
+                                'maturity_date': maturity_date,
+                                'years_since_maturity': round(years_since_maturity, 2),
+                                'auto_renewal': auto_renewal,
+                                'last_contact_date': last_contact,
+                                'years_since_contact': round(years_since_contact, 2),
+                                'dormancy_trigger': dormancy_reason,
+                                'compliance_article': '2.2',
+                                'priority': 'HIGH' if balance > self.default_params[
+                                    "high_value_threshold_aed"] else 'MEDIUM',
+                                'next_action': 'MATURITY_COMMUNICATION_REQUIRED',
+                                'risk_factors': self._assess_fd_risk_factors(account, years_since_maturity)
+                            })
+
+                except Exception as e:
+                    logger.warning(
+                        f"Error processing FD account {account.get(self.csv_columns['account_id'], 'unknown')}: {e}")
+                    continue
+
+            # Create analysis results
+            state.analysis_results = {
+                "count": len(dormant_accounts),
+                "description": "CBUAE Article 2.2 - Fixed Deposit Maturity and Renewal Analysis",
+                "details": dormant_accounts,
+                "compliance_article": "2.2",
+                "analysis_date": report_date,
+                "validation_passed": True,
+                "key_findings": self._generate_fd_findings(dormant_accounts, len(fixed_deposits)),
+                "alerts_generated": len(dormant_accounts) > 0,
+                "regulatory_requirements": [
+                    "Maturity date tracking and customer notification required",
+                    "Auto-renewal communication verification",
+                    "Post-maturity customer contact documentation",
+                    "Investment instruction compliance verification"
+                ]
+            }
+
+            state.dormant_records_found = len(dormant_accounts)
+            state.records_processed = len(fixed_deposits)
+            state.processed_dataframe = pd.DataFrame(dormant_accounts) if dormant_accounts else pd.DataFrame()
 
             state.processing_time = (datetime.now() - start_time).total_seconds()
+            state.performance_metrics = {
+                "processing_time_seconds": state.processing_time,
+                "fd_accounts_analyzed": len(fixed_deposits),
+                "dormant_fds_found": len(dormant_accounts),
+                "auto_renewal_issues": len(
+                    [a for a in dormant_accounts if a['dormancy_trigger'] == 'AUTO_RENEWAL_NO_CONTACT']),
+                "matured_unclaimed": len([a for a in dormant_accounts if a['dormancy_trigger'] == 'MATURED_UNCLAIMED']),
+                "data_quality_score": self._calculate_data_quality_score(fixed_deposits)
+            }
+
             state.agent_status = AgentStatus.COMPLETED
+            state = await self.post_analysis_memory_hook(state)
 
         except Exception as e:
+            state.agent_status = AgentStatus.FAILED
             await self._handle_error(state, e, "fixed_deposit_analysis")
 
         return state
 
+    def _assess_fd_risk_factors(self, account: pd.Series, years_since_maturity: float) -> List[str]:
+        """Assess risk factors for fixed deposit account"""
+        risk_factors = []
 
-# Article 2.3 - Investment Account Dormancy Agent
+        try:
+            balance = account[self.csv_columns['balance_current']]
+            currency = account[self.csv_columns['currency']]
+            customer_type = account[self.csv_columns['customer_type']]
+
+            if balance > self.default_params["high_value_threshold_aed"]:
+                risk_factors.append("HIGH_VALUE_INVESTMENT")
+
+            if years_since_maturity > 5:
+                risk_factors.append("LONG_OVERDUE_MATURITY")
+
+            if currency != 'AED':
+                risk_factors.append("FOREIGN_CURRENCY_INVESTMENT")
+
+            if customer_type == 'CORPORATE':
+                risk_factors.append("CORPORATE_INVESTMENT")
+
+        except Exception as e:
+            logger.warning(f"FD risk assessment failed: {e}")
+
+        return risk_factors
+
+    def _generate_fd_findings(self, dormant_accounts: List[Dict], total_fds: int) -> List[str]:
+        """Generate key findings for fixed deposits"""
+        findings = []
+
+        if dormant_accounts:
+            auto_renewal_issues = len(
+                [a for a in dormant_accounts if a['dormancy_trigger'] == 'AUTO_RENEWAL_NO_CONTACT'])
+            matured_unclaimed = len([a for a in dormant_accounts if a['dormancy_trigger'] == 'MATURED_UNCLAIMED'])
+
+            findings.append(f"Found {len(dormant_accounts)} fixed deposits meeting Article 2.2 dormancy criteria")
+            findings.append(f"Analyzed {total_fds} total fixed deposit/investment accounts")
+
+            if auto_renewal_issues > 0:
+                findings.append(f"{auto_renewal_issues} auto-renewal accounts lack customer communication")
+
+            if matured_unclaimed > 0:
+                findings.append(f"{matured_unclaimed} matured deposits remain unclaimed for 3+ years")
+
+            findings.append("Review maturity notification processes and customer response tracking")
+            findings.append("Verify auto-renewal instructions and customer contact preferences")
+        else:
+            findings.append("No fixed deposits currently meet Article 2.2 dormancy criteria")
+            findings.append(f"Analyzed {total_fds} accounts - all show proper maturity management")
+
+        return findings
+
+
 class InvestmentAccountDormancyAgent(BaseDormancyAgent):
-    """Specialized agent for investment account dormancy analysis (CBUAE Article 2.3)"""
+    """CBUAE Article 2.3 - Investment Account Dormancy Analysis using CSV columns"""
 
-    def __init__(self, memory_agent, mcp_client: MCPClient, db_connection=None):
+    def __init__(self, memory_agent=None, mcp_client: MCPClient = None, db_connection=None):
         super().__init__("investment_dormancy", memory_agent, mcp_client, db_connection)
-
-    async def _check_agent_specific_triggers(self, state: AgentState) -> bool:
-        """Check investment account specific triggers"""
-        if self.dormancy_monitoring:
-            alerts = self.dormancy_monitoring.check_investment_inactivity()
-            if alerts:
-                state.triggered_by = DormancyTrigger.INVESTMENT_MATURITY
-                return True
-        return False
 
     async def analyze_dormancy(self, state: AgentState, report_date: str) -> AgentState:
         """Analyze investment account dormancy"""
@@ -900,43 +988,83 @@ class InvestmentAccountDormancyAgent(BaseDormancyAgent):
             start_time = datetime.now()
             state.agent_status = AgentStatus.PROCESSING
 
-            if self.dormancy_monitoring:
-                alerts = self.dormancy_monitoring.check_investment_inactivity()
+            state = await self.pre_analysis_memory_hook(state)
 
-                state.analysis_results = {
-                    "count": len(alerts),
-                    "description": "CBUAE Article 2.3 - Investment Account Analysis",
-                    "compliance_article": "2.3",
-                    "analysis_date": report_date,
-                    "validation_passed": True
-                }
+            if state.input_dataframe is None or state.input_dataframe.empty:
+                raise ValueError("No input data provided for investment analysis")
 
-                state.dormant_records_found = len(alerts)
+            df = state.input_dataframe.copy()
+            report_datetime = self._safe_date_parse(report_date) or datetime.now()
 
+            # Filter for investment accounts and securities
+            investment_accounts = df[
+                (df[self.csv_columns['account_subtype']].isin(
+                    ['SECURITIES', 'INVESTMENT', 'Securities', 'Investment'])) |
+                (df[self.csv_columns['account_type']].isin(['INVESTMENT', 'Investment']))
+                ].copy()
+
+            dormant_accounts = []
+
+            for idx, account in investment_accounts.iterrows():
+                try:
+                    last_transaction = account[self.csv_columns['last_transaction_date']]
+                    balance = account[self.csv_columns['balance_current']]
+
+                    years_inactive = self._calculate_years_since(last_transaction, report_datetime)
+
+                    # CBUAE Article 2.3 Logic: Investment inactivity analysis
+                    if years_inactive >= self.default_params["standard_inactivity_years"] and balance > 0:
+                        dormant_accounts.append({
+                            'account_id': account[self.csv_columns['account_id']],
+                            'customer_id': account[self.csv_columns['customer_id']],
+                            'customer_name': account[self.csv_columns['full_name_en']],
+                            'account_type': account[self.csv_columns['account_type']],
+                            'account_subtype': account[self.csv_columns['account_subtype']],
+                            'balance_current': balance,
+                            'last_transaction_date': last_transaction,
+                            'years_inactive': round(years_inactive, 2),
+                            'dormancy_trigger': 'INVESTMENT_INACTIVITY',
+                            'compliance_article': '2.3',
+                            'priority': 'HIGH' if balance > self.default_params[
+                                "high_value_threshold_aed"] else 'MEDIUM',
+                            'next_action': 'INVESTMENT_REVIEW_REQUIRED'
+                        })
+
+                except Exception as e:
+                    logger.warning(
+                        f"Error processing investment account {account.get(self.csv_columns['account_id'], 'unknown')}: {e}")
+                    continue
+
+            state.analysis_results = {
+                "count": len(dormant_accounts),
+                "description": "CBUAE Article 2.3 - Investment Account Inactivity Analysis",
+                "details": dormant_accounts,
+                "compliance_article": "2.3",
+                "analysis_date": report_date,
+                "validation_passed": True,
+                "alerts_generated": len(dormant_accounts) > 0
+            }
+
+            state.dormant_records_found = len(dormant_accounts)
+            state.records_processed = len(investment_accounts)
+            state.processed_dataframe = pd.DataFrame(dormant_accounts) if dormant_accounts else pd.DataFrame()
             state.processing_time = (datetime.now() - start_time).total_seconds()
             state.agent_status = AgentStatus.COMPLETED
 
+            state = await self.post_analysis_memory_hook(state)
+
         except Exception as e:
+            state.agent_status = AgentStatus.FAILED
             await self._handle_error(state, e, "investment_analysis")
 
         return state
 
 
-# Article 2.4 - Payment Instruments Dormancy Agent
 class PaymentInstrumentsDormancyAgent(BaseDormancyAgent):
-    """Specialized agent for unclaimed payment instruments analysis (CBUAE Article 2.4)"""
+    """CBUAE Article 2.4 - Unclaimed Payment Instruments using CSV columns"""
 
-    def __init__(self, memory_agent, mcp_client: MCPClient, db_connection=None):
+    def __init__(self, memory_agent=None, mcp_client: MCPClient = None, db_connection=None):
         super().__init__("unclaimed_instruments", memory_agent, mcp_client, db_connection)
-
-    async def _check_agent_specific_triggers(self, state: AgentState) -> bool:
-        """Check payment instruments specific triggers"""
-        if self.dormancy_monitoring:
-            alerts = self.dormancy_monitoring.check_unclaimed_payment_instruments()
-            if alerts:
-                state.triggered_by = DormancyTrigger.PAYMENT_INSTRUMENT_UNCLAIMED
-                return True
-        return False
 
     async def analyze_dormancy(self, state: AgentState, report_date: str) -> AgentState:
         """Analyze unclaimed payment instruments"""
@@ -944,133 +1072,172 @@ class PaymentInstrumentsDormancyAgent(BaseDormancyAgent):
             start_time = datetime.now()
             state.agent_status = AgentStatus.PROCESSING
 
-            if self.dormancy_monitoring:
-                alerts = self.dormancy_monitoring.check_unclaimed_payment_instruments()
+            state = await self.pre_analysis_memory_hook(state)
 
-                state.analysis_results = {
-                    "count": len(alerts),
-                    "description": "CBUAE Article 2.4 - Unclaimed Payment Instruments",
-                    "compliance_article": "2.4",
-                    "analysis_date": report_date,
-                    "validation_passed": True
-                }
+            if state.input_dataframe is None or state.input_dataframe.empty:
+                raise ValueError("No input data provided for payment instruments analysis")
 
-                state.dormant_records_found = len(alerts)
+            df = state.input_dataframe.copy()
+            report_datetime = self._safe_date_parse(report_date) or datetime.now()
 
+            # Look for accounts with potential unclaimed instruments
+            # This could be inferred from transaction patterns or specific flags
+            unclaimed_instruments = []
+
+            for idx, account in df.iterrows():
+                try:
+                    # Check for signs of unclaimed payment instruments
+                    last_statement = account[self.csv_columns['last_statement_date']]
+                    balance = account[self.csv_columns['balance_current']]
+
+                    months_since_statement = self._calculate_months_since(last_statement, report_datetime)
+
+                    # CBUAE Article 2.4 Logic: Unclaimed instruments (1+ year unclaimed)
+                    if months_since_statement >= 12 and balance > 0:
+                        unclaimed_instruments.append({
+                            'account_id': account[self.csv_columns['account_id']],
+                            'customer_id': account[self.csv_columns['customer_id']],
+                            'customer_name': account[self.csv_columns['full_name_en']],
+                            'balance_current': balance,
+                            'last_statement_date': last_statement,
+                            'months_since_statement': round(months_since_statement, 1),
+                            'dormancy_trigger': 'UNCLAIMED_INSTRUMENT',
+                            'compliance_article': '2.4',
+                            'priority': 'MEDIUM',
+                            'next_action': 'INSTRUMENT_VERIFICATION_REQUIRED'
+                        })
+
+                except Exception as e:
+                    logger.warning(
+                        f"Error processing payment instrument for account {account.get(self.csv_columns['account_id'], 'unknown')}: {e}")
+                    continue
+
+            state.analysis_results = {
+                "count": len(unclaimed_instruments),
+                "description": "CBUAE Article 2.4 - Unclaimed Payment Instruments Analysis",
+                "details": unclaimed_instruments,
+                "compliance_article": "2.4",
+                "analysis_date": report_date,
+                "validation_passed": True,
+                "alerts_generated": len(unclaimed_instruments) > 0
+            }
+
+            state.dormant_records_found = len(unclaimed_instruments)
+            state.records_processed = len(df)
+            state.processed_dataframe = pd.DataFrame(unclaimed_instruments) if unclaimed_instruments else pd.DataFrame()
             state.processing_time = (datetime.now() - start_time).total_seconds()
             state.agent_status = AgentStatus.COMPLETED
 
+            state = await self.post_analysis_memory_hook(state)
+
         except Exception as e:
+            state.agent_status = AgentStatus.FAILED
             await self._handle_error(state, e, "payment_instruments_analysis")
 
         return state
 
 
-# Article 2.6 - Safe Deposit Box Dormancy Agent
-class SafeDepositBoxDormancyAgent(BaseDormancyAgent):
-    """Specialized agent for safe deposit box dormancy analysis (CBUAE Article 2.6)"""
-
-    def __init__(self, memory_agent, mcp_client: MCPClient, db_connection=None):
-        super().__init__("safe_deposit_dormancy", memory_agent, mcp_client, db_connection)
-
-    async def _check_agent_specific_triggers(self, state: AgentState) -> bool:
-        """Check safe deposit box specific triggers"""
-        if self.dormancy_monitoring:
-            alerts = self.dormancy_monitoring.check_safe_deposit_dormancy()
-            if alerts:
-                state.triggered_by = DormancyTrigger.SDB_UNPAID_FEES
-                return True
-        return False
-
-    async def analyze_dormancy(self, state: AgentState, report_date: str) -> AgentState:
-        """Analyze safe deposit box dormancy"""
-        try:
-            start_time = datetime.now()
-            state.agent_status = AgentStatus.PROCESSING
-
-            if self.dormancy_monitoring:
-                alerts = self.dormancy_monitoring.check_safe_deposit_dormancy()
-
-                state.analysis_results = {
-                    "count": len(alerts),
-                    "description": "CBUAE Article 2.6 - Safe Deposit Box Dormancy",
-                    "compliance_article": "2.6",
-                    "analysis_date": report_date,
-                    "validation_passed": True
-                }
-
-                state.dormant_records_found = len(alerts)
-
-            state.processing_time = (datetime.now() - start_time).total_seconds()
-            state.agent_status = AgentStatus.COMPLETED
-
-        except Exception as e:
-            await self._handle_error(state, e, "safe_deposit_analysis")
-
-        return state
-
-
-# Article 3 Process Agents
-
-# Article 3.1 - Contact Attempts Agent
 class ContactAttemptsAgent(BaseDormancyAgent):
-    """Agent for monitoring contact attempt completeness (CBUAE Article 3.1)"""
+    """CBUAE Article 3.1 - Contact Attempt Verification using CSV columns"""
 
-    def __init__(self, memory_agent, mcp_client: MCPClient, db_connection=None):
+    def __init__(self, memory_agent=None, mcp_client: MCPClient = None, db_connection=None):
         super().__init__("contact_attempts", memory_agent, mcp_client, db_connection)
 
-    async def _check_agent_specific_triggers(self, state: AgentState) -> bool:
-        """Check contact attempts specific triggers"""
-        if self.dormancy_monitoring:
-            alerts = self.dormancy_monitoring.detect_incomplete_contact_attempts()
-            if alerts:
-                state.triggered_by = DormancyTrigger.CONTACT_ATTEMPTS_INCOMPLETE
-                return True
-        return False
-
     async def analyze_dormancy(self, state: AgentState, report_date: str) -> AgentState:
-        """Analyze contact attempt completeness"""
+        """Analyze contact attempt compliance"""
         try:
             start_time = datetime.now()
             state.agent_status = AgentStatus.PROCESSING
 
-            if self.dormancy_monitoring:
-                alerts = self.dormancy_monitoring.detect_incomplete_contact_attempts()
+            state = await self.pre_analysis_memory_hook(state)
 
-                state.analysis_results = {
-                    "count": len(alerts),
-                    "description": "CBUAE Article 3.1 - Contact Attempt Verification",
-                    "compliance_article": "3.1",
-                    "analysis_date": report_date,
-                    "validation_passed": True
-                }
+            if state.input_dataframe is None or state.input_dataframe.empty:
+                raise ValueError("No input data provided for contact attempts analysis")
 
-                state.dormant_records_found = len(alerts)
+            df = state.input_dataframe.copy()
+            report_datetime = self._safe_date_parse(report_date) or datetime.now()
 
+            # Filter for accounts in dormancy process
+            dormancy_accounts = df[
+                df[self.csv_columns['dormancy_status']].isin(['FLAGGED', 'CONTACTED', 'WAITING'])
+            ].copy()
+
+            contact_issues = []
+
+            for idx, account in dormancy_accounts.iterrows():
+                try:
+                    contact_attempts = account[self.csv_columns['contact_attempts_made']]
+                    last_attempt = account[self.csv_columns['last_contact_attempt_date']]
+                    current_stage = account[self.csv_columns['current_stage']]
+
+                    # Check contact attempt compliance
+                    months_since_attempt = self._calculate_months_since(last_attempt, report_datetime)
+
+                    # CBUAE Article 3.1 Logic: Verify contact attempts
+                    has_issue = False
+                    issue_type = ""
+
+                    if contact_attempts < 3:  # Minimum contact attempts required
+                        has_issue = True
+                        issue_type = "INSUFFICIENT_CONTACT_ATTEMPTS"
+                    elif months_since_attempt > 6:  # Contact attempts too old
+                        has_issue = True
+                        issue_type = "OUTDATED_CONTACT_ATTEMPTS"
+                    elif current_stage == 'FLAGGED' and contact_attempts == 0:
+                        has_issue = True
+                        issue_type = "NO_CONTACT_ATTEMPTS_INITIATED"
+
+                    if has_issue:
+                        contact_issues.append({
+                            'account_id': account[self.csv_columns['account_id']],
+                            'customer_id': account[self.csv_columns['customer_id']],
+                            'customer_name': account[self.csv_columns['full_name_en']],
+                            'current_stage': current_stage,
+                            'contact_attempts_made': contact_attempts,
+                            'last_contact_attempt_date': last_attempt,
+                            'months_since_attempt': round(months_since_attempt, 1),
+                            'issue_type': issue_type,
+                            'dormancy_trigger': 'CONTACT_COMPLIANCE_ISSUE',
+                            'compliance_article': '3.1',
+                            'priority': 'HIGH',
+                            'next_action': 'INITIATE_CONTACT_CAMPAIGN'
+                        })
+
+                except Exception as e:
+                    logger.warning(
+                        f"Error processing contact attempts for account {account.get(self.csv_columns['account_id'], 'unknown')}: {e}")
+                    continue
+
+            state.analysis_results = {
+                "count": len(contact_issues),
+                "description": "CBUAE Article 3.1 - Contact Attempt Compliance Verification",
+                "details": contact_issues,
+                "compliance_article": "3.1",
+                "analysis_date": report_date,
+                "validation_passed": True,
+                "alerts_generated": len(contact_issues) > 0
+            }
+
+            state.dormant_records_found = len(contact_issues)
+            state.records_processed = len(dormancy_accounts)
+            state.processed_dataframe = pd.DataFrame(contact_issues) if contact_issues else pd.DataFrame()
             state.processing_time = (datetime.now() - start_time).total_seconds()
             state.agent_status = AgentStatus.COMPLETED
 
+            state = await self.post_analysis_memory_hook(state)
+
         except Exception as e:
+            state.agent_status = AgentStatus.FAILED
             await self._handle_error(state, e, "contact_attempts_analysis")
 
         return state
 
 
-# Article 3.4 - Internal Ledger Transfer Agent
 class InternalLedgerAgent(BaseDormancyAgent):
-    """Agent for monitoring internal ledger transfer eligibility (CBUAE Article 3.4)"""
+    """CBUAE Article 3.4 - Internal Ledger Transfer using CSV columns"""
 
-    def __init__(self, memory_agent, mcp_client: MCPClient, db_connection=None):
+    def __init__(self, memory_agent=None, mcp_client: MCPClient = None, db_connection=None):
         super().__init__("internal_ledger", memory_agent, mcp_client, db_connection)
-
-    async def _check_agent_specific_triggers(self, state: AgentState) -> bool:
-        """Check internal ledger transfer triggers"""
-        if self.dormancy_monitoring:
-            alerts = self.dormancy_monitoring.detect_internal_ledger_candidates()
-            if alerts:
-                state.triggered_by = DormancyTrigger.INTERNAL_LEDGER_TRANSFER
-                return True
-        return False
 
     async def analyze_dormancy(self, state: AgentState, report_date: str) -> AgentState:
         """Analyze internal ledger transfer candidates"""
@@ -1078,380 +1245,179 @@ class InternalLedgerAgent(BaseDormancyAgent):
             start_time = datetime.now()
             state.agent_status = AgentStatus.PROCESSING
 
-            if self.dormancy_monitoring:
-                alerts = self.dormancy_monitoring.detect_internal_ledger_candidates()
+            state = await self.pre_analysis_memory_hook(state)
 
-                state.analysis_results = {
-                    "count": len(alerts),
-                    "description": "CBUAE Article 3.4 - Internal Ledger Transfer Candidates",
-                    "compliance_article": "3.4",
-                    "analysis_date": report_date,
-                    "validation_passed": True
-                }
+            if state.input_dataframe is None or state.input_dataframe.empty:
+                raise ValueError("No input data provided for internal ledger analysis")
 
-                state.dormant_records_found = len(alerts)
+            df = state.input_dataframe.copy()
+            report_datetime = self._safe_date_parse(report_date) or datetime.now()
 
+            # Filter for accounts in waiting period that have completed contact attempts
+            waiting_accounts = df[
+                (df[self.csv_columns['current_stage']] == 'WAITING') &
+                (df[self.csv_columns['contact_attempts_made']] >= 3)
+                ].copy()
+
+            ledger_candidates = []
+
+            for idx, account in waiting_accounts.iterrows():
+                try:
+                    waiting_end = account[self.csv_columns['waiting_period_end']]
+                    balance = account[self.csv_columns['balance_current']]
+
+                    # Check if waiting period has ended
+                    waiting_end_date = self._safe_date_parse(waiting_end)
+
+                    if waiting_end_date and waiting_end_date <= report_datetime and balance > 0:
+                        ledger_candidates.append({
+                            'account_id': account[self.csv_columns['account_id']],
+                            'customer_id': account[self.csv_columns['customer_id']],
+                            'customer_name': account[self.csv_columns['full_name_en']],
+                            'balance_current': balance,
+                            'waiting_period_end': waiting_end,
+                            'contact_attempts_made': account[self.csv_columns['contact_attempts_made']],
+                            'dormancy_trigger': 'INTERNAL_LEDGER_ELIGIBLE',
+                            'compliance_article': '3.4',
+                            'priority': 'HIGH',
+                            'next_action': 'TRANSFER_TO_INTERNAL_LEDGER'
+                        })
+
+                except Exception as e:
+                    logger.warning(
+                        f"Error processing internal ledger candidate {account.get(self.csv_columns['account_id'], 'unknown')}: {e}")
+                    continue
+
+            state.analysis_results = {
+                "count": len(ledger_candidates),
+                "description": "CBUAE Article 3.4 - Internal Ledger Transfer Candidates",
+                "details": ledger_candidates,
+                "compliance_article": "3.4",
+                "analysis_date": report_date,
+                "validation_passed": True,
+                "alerts_generated": len(ledger_candidates) > 0
+            }
+
+            state.dormant_records_found = len(ledger_candidates)
+            state.records_processed = len(waiting_accounts)
+            state.processed_dataframe = pd.DataFrame(ledger_candidates) if ledger_candidates else pd.DataFrame()
             state.processing_time = (datetime.now() - start_time).total_seconds()
             state.agent_status = AgentStatus.COMPLETED
 
+            state = await self.post_analysis_memory_hook(state)
+
         except Exception as e:
+            state.agent_status = AgentStatus.FAILED
             await self._handle_error(state, e, "internal_ledger_analysis")
 
         return state
 
 
-# Article 3.7 - SDB Court Application Agent
-class SDBCourtApplicationAgent(BaseDormancyAgent):
-    """Agent for monitoring SDB court application requirements (CBUAE Article 3.7)"""
-
-    def __init__(self, memory_agent, mcp_client: MCPClient, db_connection=None):
-        super().__init__("sdb_court_application", memory_agent, mcp_client, db_connection)
-
-    async def _check_agent_specific_triggers(self, state: AgentState) -> bool:
-        """Check SDB court application triggers"""
-        if self.dormancy_monitoring:
-            alerts = self.dormancy_monitoring.detect_sdb_court_application_needed()
-            if alerts:
-                state.triggered_by = DormancyTrigger.SDB_COURT_APPLICATION
-                return True
-        return False
-
-    async def analyze_dormancy(self, state: AgentState, report_date: str) -> AgentState:
-        """Analyze SDB court application requirements"""
-        try:
-            start_time = datetime.now()
-            state.agent_status = AgentStatus.PROCESSING
-
-            if self.dormancy_monitoring:
-                alerts = self.dormancy_monitoring.detect_sdb_court_application_needed()
-
-                state.analysis_results = {
-                    "count": len(alerts),
-                    "description": "CBUAE Article 3.7 - SDB Court Application Requirements",
-                    "compliance_article": "3.7",
-                    "analysis_date": report_date,
-                    "validation_passed": True
-                }
-
-                state.dormant_records_found = len(alerts)
-
-            state.processing_time = (datetime.now() - start_time).total_seconds()
-            state.agent_status = AgentStatus.COMPLETED
-
-        except Exception as e:
-            await self._handle_error(state, e, "sdb_court_application_analysis")
-
-        return state
-
-
-# Article 3.9 - Record Retention Agent
-class RecordRetentionAgent(BaseDormancyAgent):
-    """Agent for monitoring record retention compliance (CBUAE Article 3.9)"""
-
-    def __init__(self, memory_agent, mcp_client: MCPClient, db_connection=None):
-        super().__init__("record_retention", memory_agent, mcp_client, db_connection)
-
-    async def _check_agent_specific_triggers(self, state: AgentState) -> bool:
-        """Check record retention triggers"""
-        if self.dormancy_monitoring:
-            alerts = self.dormancy_monitoring.check_record_retention_compliance()
-            if alerts:
-                state.triggered_by = DormancyTrigger.RECORD_RETENTION_VIOLATION
-                return True
-        return False
-
-    async def analyze_dormancy(self, state: AgentState, report_date: str) -> AgentState:
-        """Analyze record retention compliance"""
-        try:
-            start_time = datetime.now()
-            state.agent_status = AgentStatus.PROCESSING
-
-            if self.dormancy_monitoring:
-                alerts = self.dormancy_monitoring.check_record_retention_compliance()
-
-                state.analysis_results = {
-                    "count": len(alerts),
-                    "description": "CBUAE Article 3.9 - Record Retention Compliance",
-                    "compliance_article": "3.9",
-                    "analysis_date": report_date,
-                    "validation_passed": True
-                }
-
-                state.dormant_records_found = len(alerts)
-
-            state.processing_time = (datetime.now() - start_time).total_seconds()
-            state.agent_status = AgentStatus.COMPLETED
-
-        except Exception as e:
-            await self._handle_error(state, e, "record_retention_analysis")
-
-        return state
-
-
-# Article 4 - Customer Claims Agent
-class CustomerClaimsAgent(BaseDormancyAgent):
-    """Agent for monitoring customer claims processing (CBUAE Article 4)"""
-
-    def __init__(self, memory_agent, mcp_client: MCPClient, db_connection=None):
-        super().__init__("customer_claims", memory_agent, mcp_client, db_connection)
-
-    async def _check_agent_specific_triggers(self, state: AgentState) -> bool:
-        """Check customer claims triggers"""
-        if self.dormancy_monitoring:
-            alerts = self.dormancy_monitoring.detect_claim_processing_pending()
-            if alerts:
-                state.triggered_by = DormancyTrigger.CLAIM_PROCESSING_OVERDUE
-                return True
-        return False
-
-    async def analyze_dormancy(self, state: AgentState, report_date: str) -> AgentState:
-        """Analyze customer claims processing"""
-        try:
-            start_time = datetime.now()
-            state.agent_status = AgentStatus.PROCESSING
-
-            if self.dormancy_monitoring:
-                alerts = self.dormancy_monitoring.detect_claim_processing_pending()
-
-                state.analysis_results = {
-                    "count": len(alerts),
-                    "description": "CBUAE Article 4 - Customer Claims Processing",
-                    "compliance_article": "4",
-                    "analysis_date": report_date,
-                    "validation_passed": True
-                }
-
-                state.dormant_records_found = len(alerts)
-
-            state.processing_time = (datetime.now() - start_time).total_seconds()
-            state.agent_status = AgentStatus.COMPLETED
-
-        except Exception as e:
-            await self._handle_error(state, e, "customer_claims_analysis")
-
-        return state
-
-
-# Article 5 - Proactive Contact Agent
-class ProactiveContactAgent(BaseDormancyAgent):
-    """Agent for proactive contact monitoring (CBUAE Article 5)"""
-
-    def __init__(self, memory_agent, mcp_client: MCPClient, db_connection=None):
-        super().__init__("proactive_contact", memory_agent, mcp_client, db_connection)
-
-    async def _check_agent_specific_triggers(self, state: AgentState) -> bool:
-        """Check proactive contact triggers"""
-        if self.dormancy_monitoring:
-            alerts = self.dormancy_monitoring.check_contact_attempts_needed()
-            if alerts:
-                state.triggered_by = DormancyTrigger.PROACTIVE_CONTACT
-                return True
-        return False
-
-    async def analyze_dormancy(self, state: AgentState, report_date: str) -> AgentState:
-        """Analyze proactive contact requirements"""
-        try:
-            start_time = datetime.now()
-            state.agent_status = AgentStatus.PROCESSING
-
-            if self.dormancy_monitoring:
-                alerts = self.dormancy_monitoring.check_contact_attempts_needed()
-
-                state.analysis_results = {
-                    "count": len(alerts),
-                    "description": "CBUAE Article 5 - Proactive Contact Requirements",
-                    "compliance_article": "5",
-                    "analysis_date": report_date,
-                    "validation_passed": True
-                }
-
-                state.dormant_records_found = len(alerts)
-
-            state.processing_time = (datetime.now() - start_time).total_seconds()
-            state.agent_status = AgentStatus.COMPLETED
-
-        except Exception as e:
-            await self._handle_error(state, e, "proactive_contact_analysis")
-
-        return state
-
-
-# Article 7.3 - Statement Suppression Agent
-class StatementSuppressionAgent(BaseDormancyAgent):
-    """Agent for statement suppression monitoring (CBUAE Article 7.3)"""
-
-    def __init__(self, memory_agent, mcp_client: MCPClient, db_connection=None):
-        super().__init__("statement_suppression", memory_agent, mcp_client, db_connection)
-
-    async def _check_agent_specific_triggers(self, state: AgentState) -> bool:
-        """Check statement suppression triggers"""
-        if self.dormancy_monitoring:
-            alerts = self.dormancy_monitoring.detect_statement_freeze_candidates()
-            if alerts:
-                state.triggered_by = DormancyTrigger.STATEMENT_SUPPRESSION
-                return True
-        return False
-
-    async def analyze_dormancy(self, state: AgentState, report_date: str) -> AgentState:
-        """Analyze statement suppression eligibility"""
-        try:
-            start_time = datetime.now()
-            state.agent_status = AgentStatus.PROCESSING
-
-            if self.dormancy_monitoring:
-                alerts = self.dormancy_monitoring.detect_statement_freeze_candidates()
-
-                state.analysis_results = {
-                    "count": len(alerts),
-                    "description": "CBUAE Article 7.3 - Statement Suppression Eligibility",
-                    "compliance_article": "7.3",
-                    "analysis_date": report_date,
-                    "validation_passed": True
-                }
-
-                state.dormant_records_found = len(alerts)
-
-            state.processing_time = (datetime.now() - start_time).total_seconds()
-            state.agent_status = AgentStatus.COMPLETED
-
-        except Exception as e:
-            await self._handle_error(state, e, "statement_suppression_analysis")
-
-        return state
-
-
-# Article 8 - Central Bank Transfer Agents
-
-# Article 8.1 - CB Transfer Eligibility Agent
 class CBTransferEligibilityAgent(BaseDormancyAgent):
-    """Agent for Central Bank transfer eligibility (CBUAE Article 8.1)"""
+    """CBUAE Article 8.1 - Central Bank Transfer Eligibility using CSV columns"""
 
-    def __init__(self, memory_agent, mcp_client: MCPClient, db_connection=None):
+    def __init__(self, memory_agent=None, mcp_client: MCPClient = None, db_connection=None):
         super().__init__("cb_transfer_eligibility", memory_agent, mcp_client, db_connection)
 
-    async def _check_agent_specific_triggers(self, state: AgentState) -> bool:
-        """Check CB transfer eligibility triggers"""
-        if self.dormancy_monitoring:
-            alerts = self.dormancy_monitoring.check_eligible_for_cb_transfer()
-            if alerts:
-                state.triggered_by = DormancyTrigger.CB_TRANSFER_ELIGIBILITY
-                return True
-        return False
-
     async def analyze_dormancy(self, state: AgentState, report_date: str) -> AgentState:
-        """Analyze CB transfer eligibility"""
+        """Analyze Central Bank transfer eligibility"""
         try:
             start_time = datetime.now()
             state.agent_status = AgentStatus.PROCESSING
 
-            if self.dormancy_monitoring:
-                alerts = self.dormancy_monitoring.check_eligible_for_cb_transfer()
+            state = await self.pre_analysis_memory_hook(state)
 
-                state.analysis_results = {
-                    "count": len(alerts),
-                    "description": "CBUAE Article 8.1 - Central Bank Transfer Eligibility",
-                    "compliance_article": "8.1",
-                    "analysis_date": report_date,
-                    "validation_passed": True
-                }
+            if state.input_dataframe is None or state.input_dataframe.empty:
+                raise ValueError("No input data provided for CB transfer analysis")
 
-                state.dormant_records_found = len(alerts)
+            df = state.input_dataframe.copy()
+            report_datetime = self._safe_date_parse(report_date) or datetime.now()
 
+            # Check transfer eligibility dates
+            eligible_accounts = []
+
+            for idx, account in df.iterrows():
+                try:
+                    transfer_eligibility = account[self.csv_columns['transfer_eligibility_date']]
+                    balance = account[self.csv_columns['balance_current']]
+                    transferred_to_cb = account[self.csv_columns['transferred_to_cb_date']]
+
+                    # Check if eligible for CB transfer and not already transferred
+                    eligibility_date = self._safe_date_parse(transfer_eligibility)
+
+                    if (eligibility_date and
+                            eligibility_date <= report_datetime and
+                            pd.isna(transferred_to_cb) and
+                            balance > 0):
+                        years_eligible = self._calculate_years_since(transfer_eligibility, report_datetime)
+
+                        eligible_accounts.append({
+                            'account_id': account[self.csv_columns['account_id']],
+                            'customer_id': account[self.csv_columns['customer_id']],
+                            'customer_name': account[self.csv_columns['full_name_en']],
+                            'balance_current': balance,
+                            'transfer_eligibility_date': transfer_eligibility,
+                            'years_eligible': round(years_eligible, 2),
+                            'dormancy_trigger': 'CB_TRANSFER_ELIGIBLE',
+                            'compliance_article': '8.1',
+                            'priority': 'CRITICAL',
+                            'next_action': 'PREPARE_CB_TRANSFER'
+                        })
+
+                except Exception as e:
+                    logger.warning(
+                        f"Error processing CB transfer eligibility for account {account.get(self.csv_columns['account_id'], 'unknown')}: {e}")
+                    continue
+
+            state.analysis_results = {
+                "count": len(eligible_accounts),
+                "description": "CBUAE Article 8.1 - Central Bank Transfer Eligibility Analysis",
+                "details": eligible_accounts,
+                "compliance_article": "8.1",
+                "analysis_date": report_date,
+                "validation_passed": True,
+                "alerts_generated": len(eligible_accounts) > 0
+            }
+
+            state.dormant_records_found = len(eligible_accounts)
+            state.records_processed = len(df)
+            state.processed_dataframe = pd.DataFrame(eligible_accounts) if eligible_accounts else pd.DataFrame()
             state.processing_time = (datetime.now() - start_time).total_seconds()
             state.agent_status = AgentStatus.COMPLETED
 
+            state = await self.post_analysis_memory_hook(state)
+
         except Exception as e:
+            state.agent_status = AgentStatus.FAILED
             await self._handle_error(state, e, "cb_transfer_analysis")
 
         return state
 
 
-# Article 8.5 - Foreign Currency Conversion Agent
-class ForeignCurrencyConversionAgent(BaseDormancyAgent):
-    """Agent for foreign currency conversion monitoring (CBUAE Article 8.5)"""
+# ===== COMPREHENSIVE WORKFLOW ORCHESTRATOR =====
 
-    def __init__(self, memory_agent, mcp_client: MCPClient, db_connection=None):
-        super().__init__("foreign_currency_conversion", memory_agent, mcp_client, db_connection)
-
-    async def _check_agent_specific_triggers(self, state: AgentState) -> bool:
-        """Check foreign currency conversion triggers"""
-        if self.dormancy_monitoring:
-            alerts = self.dormancy_monitoring.detect_foreign_currency_conversion_needed()
-            if alerts:
-                state.triggered_by = DormancyTrigger.FOREIGN_CURRENCY_CONVERSION
-                return True
-        return False
-
-    async def analyze_dormancy(self, state: AgentState, report_date: str) -> AgentState:
-        """Analyze foreign currency conversion requirements"""
-        try:
-            start_time = datetime.now()
-            state.agent_status = AgentStatus.PROCESSING
-
-            if self.dormancy_monitoring:
-                alerts = self.dormancy_monitoring.detect_foreign_currency_conversion_needed()
-
-                state.analysis_results = {
-                    "count": len(alerts),
-                    "description": "CBUAE Article 8.5 - Foreign Currency Conversion Requirements",
-                    "compliance_article": "8.5",
-                    "analysis_date": report_date,
-                    "validation_passed": True
-                }
-
-                state.dormant_records_found = len(alerts)
-
-            state.processing_time = (datetime.now() - start_time).total_seconds()
-            state.agent_status = AgentStatus.COMPLETED
-
-        except Exception as e:
-            await self._handle_error(state, e, "foreign_currency_analysis")
-
-        return state
-
-
-# Comprehensive Workflow Orchestrator
 class DormancyWorkflowOrchestrator:
     """LangGraph-based workflow orchestrator for comprehensive CBUAE dormancy analysis"""
 
-    def __init__(self, memory_agent, mcp_client: MCPClient, db_connection=None):
-        self.memory_agent = memory_agent
-        self.mcp_client = mcp_client
+    def __init__(self, memory_agent=None, mcp_client: MCPClient = None, db_connection=None):
+        self.memory_agent = memory_agent or MockMemoryAgent()
+        self.mcp_client = mcp_client or MCPClient()
         self.db_connection = db_connection
 
-        # Initialize comprehensive monitoring system
-        if db_connection:
-            self.monitoring_system = initialize_dormancy_monitoring_system(db_connection)
-        else:
-            self.monitoring_system = None
-
-        # Initialize all specialized agents
+        # Initialize all specialized agents with CSV column mapping
         self.agents = {
             # Article 2 - Dormancy Criteria Agents
             "demand_deposit": DemandDepositDormancyAgent(memory_agent, mcp_client, db_connection),
             "fixed_deposit": FixedDepositDormancyAgent(memory_agent, mcp_client, db_connection),
             "investment": InvestmentAccountDormancyAgent(memory_agent, mcp_client, db_connection),
-            "safe_deposit": SafeDepositBoxDormancyAgent(memory_agent, mcp_client, db_connection),
             "payment_instruments": PaymentInstrumentsDormancyAgent(memory_agent, mcp_client, db_connection),
 
             # Article 3 - Bank Obligations Agents
             "contact_attempts": ContactAttemptsAgent(memory_agent, mcp_client, db_connection),
             "internal_ledger": InternalLedgerAgent(memory_agent, mcp_client, db_connection),
-            "sdb_court_application": SDBCourtApplicationAgent(memory_agent, mcp_client, db_connection),
-            "record_retention": RecordRetentionAgent(memory_agent, mcp_client, db_connection),
-
-            # Article 4 - Customer Claims Agent
-            "customer_claims": CustomerClaimsAgent(memory_agent, mcp_client, db_connection),
-
-            # Article 5 - Proactive Communication Agent
-            "proactive_contact": ProactiveContactAgent(memory_agent, mcp_client, db_connection),
-
-            # Article 7.3 - Statement Suppression Agent
-            "statement_suppression": StatementSuppressionAgent(memory_agent, mcp_client, db_connection),
 
             # Article 8 - Central Bank Transfer Agents
             "cb_transfer": CBTransferEligibilityAgent(memory_agent, mcp_client, db_connection),
-            "foreign_currency": ForeignCurrencyConversionAgent(memory_agent, mcp_client, db_connection)
         }
 
         # Initialize LangGraph workflow
@@ -1464,50 +1430,17 @@ class DormancyWorkflowOrchestrator:
 
         # Add nodes for comprehensive monitoring workflow
         workflow.add_node("initialize", self._initialize_comprehensive_analysis)
-        workflow.add_node("run_monitoring_system", self._run_comprehensive_monitoring)
-        workflow.add_node("check_triggers", self._check_all_triggers)
-        workflow.add_node("execute_agents", self._execute_triggered_agents)
+        workflow.add_node("execute_agents", self._execute_all_agents)
         workflow.add_node("consolidate_results", self._consolidate_comprehensive_results)
         workflow.add_node("generate_reports", self._generate_cbuae_reports)
-        workflow.add_node("handle_errors", self._handle_workflow_errors)
         workflow.add_node("finalize", self._finalize_comprehensive_analysis)
 
         # Define workflow edges
         workflow.add_edge(START, "initialize")
-        workflow.add_edge("initialize", "run_monitoring_system")
-
-        workflow.add_conditional_edges(
-            "run_monitoring_system",
-            self._route_after_monitoring,
-            {
-                "triggers": "check_triggers",
-                "no_data": "finalize",
-                "error": "handle_errors"
-            }
-        )
-
-        workflow.add_conditional_edges(
-            "check_triggers",
-            self._route_after_triggers,
-            {
-                "execute": "execute_agents",
-                "no_triggers": "generate_reports",
-                "error": "handle_errors"
-            }
-        )
-
-        workflow.add_conditional_edges(
-            "execute_agents",
-            self._route_after_execution,
-            {
-                "consolidate": "consolidate_results",
-                "error": "handle_errors"
-            }
-        )
-
+        workflow.add_edge("initialize", "execute_agents")
+        workflow.add_edge("execute_agents", "consolidate_results")
         workflow.add_edge("consolidate_results", "generate_reports")
         workflow.add_edge("generate_reports", "finalize")
-        workflow.add_edge("handle_errors", "finalize")
         workflow.add_edge("finalize", END)
 
         return workflow.compile(checkpointer=MemorySaver())
@@ -1518,12 +1451,10 @@ class DormancyWorkflowOrchestrator:
             state.analysis_status = DormancyStatus.PROCESSING
             state.current_node = "initialize"
 
-            # Log initialization with comprehensive monitoring
             state.analysis_log.append({
                 "timestamp": datetime.now().isoformat(),
                 "stage": "comprehensive_initialization",
                 "status": "started",
-                "monitoring_system_available": self.monitoring_system is not None,
                 "total_agents": len(self.agents),
                 "cbuae_articles_covered": self._get_covered_articles()
             })
@@ -1535,106 +1466,18 @@ class DormancyWorkflowOrchestrator:
             state.analysis_status = DormancyStatus.FAILED
             return state
 
-    async def _run_comprehensive_monitoring(self, state: DormancyAnalysisState) -> DormancyAnalysisState:
-        """Run comprehensive monitoring system"""
-        try:
-            state.current_node = "run_monitoring_system"
-
-            if self.monitoring_system:
-                # Run all dormancy monitors from the comprehensive system
-                monitor_results = self.monitoring_system.run_all_dormancy_monitors()
-
-                # Generate compliance dashboard data
-                dashboard_data = self.monitoring_system.generate_compliance_dashboard_data()
-
-                # Store monitoring results in state
-                state.memory_context["monitoring_results"] = monitor_results
-                state.memory_context["dashboard_data"] = dashboard_data
-
-                # Check if any alerts were generated
-                total_alerts = monitor_results.get("summary", {}).get("total_alerts", 0)
-                state.routing_decision = "triggers" if total_alerts > 0 else "no_data"
-
-                state.analysis_log.append({
-                    "timestamp": datetime.now().isoformat(),
-                    "stage": "comprehensive_monitoring",
-                    "total_alerts": total_alerts,
-                    "monitors_executed": monitor_results.get("summary", {}).get("monitors_executed", 0),
-                    "high_priority_alerts": monitor_results.get("summary", {}).get("high_priority_alerts", 0)
-                })
-            else:
-                state.routing_decision = "triggers"  # Proceed with agent-based analysis
-                state.analysis_log.append({
-                    "timestamp": datetime.now().isoformat(),
-                    "stage": "monitoring_system_unavailable",
-                    "fallback": "agent_based_analysis"
-                })
-
-            return state
-
-        except Exception as e:
-            logger.error(f"Comprehensive monitoring failed: {str(e)}")
-            state.routing_decision = "error"
-            return state
-
-    async def _check_all_triggers(self, state: DormancyAnalysisState) -> DormancyAnalysisState:
-        """Check triggers for all comprehensive agents"""
-        try:
-            state.current_node = "check_triggers"
-
-            # Use monitoring results if available
-            monitoring_results = state.memory_context.get("monitoring_results", {})
-            triggered_agents = []
-
-            for agent_name, agent in self.agents.items():
-                try:
-                    # Check if monitoring system detected relevant alerts for this agent
-                    agent_alerts = self._get_agent_alerts(agent_name, monitoring_results)
-
-                    if agent_alerts:
-                        triggered_agents.append(agent_name)
-                        logger.info(f"Agent {agent_name} triggered by monitoring system alerts")
-                    else:
-                        # Fallback to agent-specific trigger checking
-                        agent_state = AgentState(
-                            agent_id=f"{agent_name}_{secrets.token_hex(8)}",
-                            agent_type=agent_name,
-                            session_id=state.session_id,
-                            user_id=state.user_id,
-                            timestamp=datetime.now(),
-                            input_dataframe=pd.DataFrame(state.processed_data.get('accounts', [])),
-                            analysis_config=state.analysis_config
-                        )
-
-                        should_trigger = await agent.check_triggers(agent_state)
-                        if should_trigger:
-                            triggered_agents.append(agent_name)
-
-                except Exception as e:
-                    logger.warning(f"Trigger check failed for {agent_name}: {str(e)}")
-
-            state.active_agents = triggered_agents
-            state.routing_decision = "execute" if triggered_agents else "no_triggers"
-
-            return state
-
-        except Exception as e:
-            logger.error(f"Comprehensive trigger checking failed: {str(e)}")
-            state.routing_decision = "error"
-            return state
-
-    async def _execute_triggered_agents(self, state: DormancyAnalysisState) -> DormancyAnalysisState:
-        """Execute all triggered agents with comprehensive monitoring"""
+    async def _execute_all_agents(self, state: DormancyAnalysisState) -> DormancyAnalysisState:
+        """Execute all agents with CSV data"""
         try:
             state.current_node = "execute_agents"
             accounts_df = pd.DataFrame(state.processed_data['accounts'])
             report_date = state.analysis_config.get('report_date', datetime.now().strftime("%Y-%m-%d"))
 
-            # Execute agents with monitoring system integration
-            for agent_name in state.active_agents:
-                try:
-                    agent = self.agents[agent_name]
+            logger.info(f"Executing {len(self.agents)} dormancy agents on {len(accounts_df)} accounts")
 
+            # Execute all agents
+            for agent_name, agent in self.agents.items():
+                try:
                     agent_state = AgentState(
                         agent_id=f"{agent_name}_{secrets.token_hex(8)}",
                         agent_type=agent_name,
@@ -1645,47 +1488,30 @@ class DormancyWorkflowOrchestrator:
                         analysis_config=state.analysis_config
                     )
 
-                    # Execute agent with full pipeline
-                    completed_state = await self._execute_single_comprehensive_agent(agent, agent_state, report_date)
-                    state.agent_results[agent_name] = completed_state
+                    # Execute agent
+                    completed_state = await agent.analyze_dormancy(agent_state, report_date)
+                    state.agent_results[agent_name] = completed_state.analysis_results
 
                     if completed_state.agent_status == AgentStatus.COMPLETED:
                         state.completed_agents.append(agent_name)
                         state.dormant_accounts_found += completed_state.dormant_records_found
+
+                        logger.info(
+                            f"Agent {agent_name} completed: {completed_state.dormant_records_found} dormant accounts found")
                     else:
                         state.failed_agents.append(agent_name)
+                        logger.warning(f"Agent {agent_name} failed")
 
                 except Exception as e:
                     logger.error(f"Agent {agent_name} execution failed: {str(e)}")
                     state.failed_agents.append(agent_name)
 
-            state.routing_decision = "consolidate" if state.completed_agents else "error"
+            state.total_accounts_analyzed = len(accounts_df)
             return state
 
         except Exception as e:
-            logger.error(f"Comprehensive agent execution failed: {str(e)}")
-            state.routing_decision = "error"
+            logger.error(f"Agent execution failed: {str(e)}")
             return state
-
-    async def _execute_single_comprehensive_agent(self, agent: BaseDormancyAgent, agent_state: AgentState,
-                                                  report_date: str) -> AgentState:
-        """Execute a single agent with comprehensive monitoring integration"""
-        try:
-            # Pre-analysis memory hook
-            agent_state = await agent.pre_analysis_memory_hook(agent_state)
-
-            # Main analysis with monitoring system integration
-            agent_state = await agent.analyze_dormancy(agent_state, report_date)
-
-            # Post-analysis memory hook
-            agent_state = await agent.post_analysis_memory_hook(agent_state)
-
-            return agent_state
-
-        except Exception as e:
-            logger.error(f"Comprehensive agent execution failed for {agent.agent_type}: {str(e)}")
-            agent_state.agent_status = AgentStatus.FAILED
-            return agent_state
 
     async def _consolidate_comprehensive_results(self, state: DormancyAnalysisState) -> DormancyAnalysisState:
         """Consolidate results with comprehensive CBUAE compliance analysis"""
@@ -1701,7 +1527,6 @@ class DormancyWorkflowOrchestrator:
                     "high_priority_findings": 0,
                     "immediate_actions_required": []
                 },
-                "monitoring_system_results": state.memory_context.get("monitoring_results", {}),
                 "agent_based_results": {},
                 "regulatory_risk_assessment": {
                     "overall_risk_level": "low",
@@ -1710,12 +1535,11 @@ class DormancyWorkflowOrchestrator:
                     "medium_risk_items": 0,
                     "low_risk_items": 0
                 },
-                "next_actions": [],
                 "audit_trail": {
                     "analysis_timestamp": datetime.now().isoformat(),
-                    "comprehensive_monitoring": True,
                     "agents_executed": len(state.completed_agents),
-                    "total_findings": state.dormant_accounts_found
+                    "total_findings": state.dormant_accounts_found,
+                    "data_source": "csv_banking_compliance_dataset"
                 }
             }
 
@@ -1723,17 +1547,26 @@ class DormancyWorkflowOrchestrator:
             for agent_name in state.completed_agents:
                 agent_result = state.agent_results[agent_name]
 
-                if agent_result.analysis_results:
-                    article = agent_result.analysis_results.get("compliance_article")
+                if agent_result:
+                    article = agent_result.get("compliance_article")
                     if article:
                         consolidated["cbuae_compliance_summary"]["articles_analyzed"].append(f"Article {article}")
 
+                    findings_count = agent_result.get("count", 0)
                     consolidated["agent_based_results"][agent_name] = {
                         "article": article,
-                        "findings": agent_result.dormant_records_found,
-                        "description": agent_result.analysis_results.get("description", ""),
-                        "priority": agent_result.analysis_results.get("priority", "medium")
+                        "findings": findings_count,
+                        "description": agent_result.get("description", ""),
+                        "priority": "HIGH" if findings_count > 10 else "MEDIUM" if findings_count > 0 else "LOW"
                     }
+
+                    # Update risk assessment
+                    if findings_count > 10:
+                        consolidated["regulatory_risk_assessment"]["high_risk_items"] += 1
+                    elif findings_count > 0:
+                        consolidated["regulatory_risk_assessment"]["medium_risk_items"] += 1
+                    else:
+                        consolidated["regulatory_risk_assessment"]["low_risk_items"] += 1
 
             # Calculate overall compliance
             total_findings = sum(
@@ -1741,19 +1574,33 @@ class DormancyWorkflowOrchestrator:
             )
 
             consolidated["cbuae_compliance_summary"]["total_compliance_items"] = total_findings
+            consolidated["cbuae_compliance_summary"]["high_priority_findings"] = \
+                consolidated["regulatory_risk_assessment"]["high_risk_items"]
 
-            if total_findings > 20:
+            # Determine overall risk level
+            if consolidated["regulatory_risk_assessment"]["high_risk_items"] > 3:
                 consolidated["regulatory_risk_assessment"]["overall_risk_level"] = "critical"
-            elif total_findings > 10:
+            elif consolidated["regulatory_risk_assessment"]["high_risk_items"] > 0:
                 consolidated["regulatory_risk_assessment"]["overall_risk_level"] = "high"
-            elif total_findings > 0:
+            elif consolidated["regulatory_risk_assessment"]["medium_risk_items"] > 5:
                 consolidated["regulatory_risk_assessment"]["overall_risk_level"] = "medium"
+
+            # Generate immediate actions
+            high_risk_agents = [
+                name for name, result in consolidated["agent_based_results"].items()
+                if result["priority"] == "HIGH"
+            ]
+
+            if high_risk_agents:
+                consolidated["cbuae_compliance_summary"]["immediate_actions_required"].append(
+                    f"Immediate review required for: {', '.join(high_risk_agents)}"
+                )
 
             state.dormancy_summary = consolidated
             return state
 
         except Exception as e:
-            logger.error(f"Comprehensive result consolidation failed: {str(e)}")
+            logger.error(f"Result consolidation failed: {str(e)}")
             return state
 
     async def _generate_cbuae_reports(self, state: DormancyAnalysisState) -> DormancyAnalysisState:
@@ -1761,45 +1608,35 @@ class DormancyWorkflowOrchestrator:
         try:
             state.current_node = "generate_reports"
 
-            if self.monitoring_system and self.monitoring_system.reporting_engine:
-                # Generate quarterly BRF report
-                current_date = datetime.now()
-                quarter = (current_date.month - 1) // 3 + 1
+            # Generate summary statistics
+            if "regulatory_reports" not in state.dormancy_summary:
+                state.dormancy_summary["regulatory_reports"] = {}
 
-                quarterly_report = self.monitoring_system.reporting_engine.generate_quarterly_brf_report(
-                    quarter, current_date.year
-                )
+            # Create detailed breakdown by article
+            article_breakdown = {}
+            for agent_name, result in state.agent_results.items():
+                if result:
+                    article = result.get("compliance_article")
+                    if article:
+                        article_breakdown[f"Article_{article}"] = {
+                            "agent": agent_name,
+                            "findings_count": result.get("count", 0),
+                            "description": result.get("description", ""),
+                            "key_findings": result.get("key_findings", []),
+                            "validation_passed": result.get("validation_passed", True)
+                        }
 
-                # Generate aging analysis
-                aging_report = self.monitoring_system.reporting_engine.generate_dormancy_aging_report()
-
-                # Store reports in state
-                state.dormancy_summary["regulatory_reports"] = {
-                    "quarterly_brf": quarterly_report,
-                    "aging_analysis": aging_report,
-                    "generated_timestamp": datetime.now().isoformat()
-                }
+            state.dormancy_summary["regulatory_reports"] = {
+                "article_breakdown": article_breakdown,
+                "generated_timestamp": datetime.now().isoformat(),
+                "data_quality_assessment": self._assess_overall_data_quality(state),
+                "recommendations": self._generate_recommendations(state)
+            }
 
             return state
 
         except Exception as e:
             logger.error(f"CBUAE report generation failed: {str(e)}")
-            return state
-
-    async def _handle_workflow_errors(self, state: DormancyAnalysisState) -> DormancyAnalysisState:
-        """Handle comprehensive workflow errors"""
-        try:
-            state.current_node = "handle_errors"
-            state.analysis_status = DormancyStatus.FAILED
-
-            # Use error handler
-            error_handler = ErrorHandlerAgent(self.memory_agent, self.mcp_client)
-            # Error handling logic here
-
-            return state
-
-        except Exception as e:
-            logger.error(f"Error handling failed: {str(e)}")
             return state
 
     async def _finalize_comprehensive_analysis(self, state: DormancyAnalysisState) -> DormancyAnalysisState:
@@ -1813,98 +1650,107 @@ class DormancyWorkflowOrchestrator:
             # Create comprehensive final results
             state.dormancy_results = {
                 "session_id": state.session_id,
-                "analysis_type": "comprehensive_cbuae_monitoring",
-                "monitoring_system_used": self.monitoring_system is not None,
+                "analysis_type": "comprehensive_cbuae_monitoring_csv",
                 "total_cbuae_articles_covered": len(self._get_covered_articles()),
                 "comprehensive_summary": state.dormancy_summary,
                 "agent_execution_results": {
                     agent_name: {
-                        "agent_status": result.agent_status.value,
-                        "findings": result.dormant_records_found,
-                        "cbuae_article": result.analysis_results.get(
-                            "compliance_article") if result.analysis_results else None,
-                        "regulatory_compliance": result.analysis_results.get("validation_passed",
-                                                                             True) if result.analysis_results else True
+                        "findings": result.get("count", 0) if result else 0,
+                        "cbuae_article": result.get("compliance_article") if result else None,
+                        "description": result.get("description", "") if result else "",
+                        "validation_passed": result.get("validation_passed", True) if result else True
                     } for agent_name, result in state.agent_results.items()
                 },
                 "regulatory_compliance_status": "compliant" if state.analysis_status == DormancyStatus.COMPLETED else "requires_review",
-                "completion_timestamp": datetime.now().isoformat()
+                "completion_timestamp": datetime.now().isoformat(),
+                "data_source_info": {
+                    "source": "banking_compliance_dataset_csv",
+                    "total_records": state.total_accounts_analyzed,
+                    "columns_used": list(self.agents["demand_deposit"].csv_columns.keys())
+                }
             }
 
             return state
 
         except Exception as e:
-            logger.error(f"Comprehensive analysis finalization failed: {str(e)}")
+            logger.error(f"Analysis finalization failed: {str(e)}")
             state.analysis_status = DormancyStatus.FAILED
             return state
 
     def _get_covered_articles(self) -> List[str]:
         """Get list of CBUAE articles covered by the agents"""
-        return [
-            "2.1.1", "2.2", "2.3", "2.4", "2.6",  # Dormancy criteria
-            "3.1", "3.4", "3.7", "3.9",  # Bank obligations
-            "4",  # Customer claims
-            "5",  # Proactive communication
-            "7.3",  # Statement suppression
-            "8.1", "8.5"  # Central Bank transfers
-        ]
+        return ["2.1.1", "2.2", "2.3", "2.4", "3.1", "3.4", "8.1"]
 
-    def _get_agent_alerts(self, agent_name: str, monitoring_results: Dict) -> List:
-        """Get alerts relevant to specific agent from monitoring results"""
-        if not monitoring_results:
-            return []
+    def _assess_overall_data_quality(self, state: DormancyAnalysisState) -> Dict:
+        """Assess overall data quality"""
+        try:
+            df = pd.DataFrame(state.processed_data['accounts'])
 
-        agent_mapping = {
-            "demand_deposit": "demand_deposit_inactivity",
-            "fixed_deposit": "fixed_deposit_inactivity",
-            "investment": "investment_inactivity",
-            "safe_deposit": "safe_deposit_dormancy",
-            "payment_instruments": "unclaimed_payment_instruments",
-            "contact_attempts": "incomplete_contact_attempts",
-            "internal_ledger": "internal_ledger_candidates",
-            "sdb_court_application": "sdb_court_applications",
-            "record_retention": "record_retention_compliance",
-            "customer_claims": "claim_processing_pending",
-            "proactive_contact": "proactive_contact_needed",
-            "statement_suppression": "statement_suppression_candidates",
-            "cb_transfer": "cb_transfer_eligible",
-            "foreign_currency": "foreign_currency_conversion"
-        }
+            # Check for missing critical fields
+            critical_fields = [
+                'customer_id', 'account_id', 'account_type', 'account_status',
+                'last_transaction_date', 'balance_current', 'has_outstanding_facilities'
+            ]
 
-        monitor_key = agent_mapping.get(agent_name)
-        if monitor_key and monitor_key in monitoring_results:
-            return monitoring_results[monitor_key]
+            missing_data = {}
+            for field in critical_fields:
+                if field in df.columns:
+                    missing_count = df[field].isna().sum()
+                    missing_data[field] = {
+                        "missing_count": int(missing_count),
+                        "missing_percentage": round((missing_count / len(df)) * 100, 2)
+                    }
 
-        return []
+            return {
+                "total_records": len(df),
+                "missing_data_analysis": missing_data,
+                "overall_quality_score": round(
+                    1 - (sum(m["missing_percentage"] for m in missing_data.values()) / len(missing_data) / 100), 3)
+            }
 
-    def _route_after_monitoring(self, state: DormancyAnalysisState) -> str:
-        """Route after monitoring system execution"""
-        return state.routing_decision
+        except Exception as e:
+            logger.warning(f"Data quality assessment failed: {e}")
+            return {"error": str(e)}
 
-    def _route_after_triggers(self, state: DormancyAnalysisState) -> str:
-        """Route after trigger checking"""
-        return state.routing_decision
+    def _generate_recommendations(self, state: DormancyAnalysisState) -> List[str]:
+        """Generate recommendations based on analysis results"""
+        recommendations = []
 
-    def _route_after_execution(self, state: DormancyAnalysisState) -> str:
-        """Route after agent execution"""
-        return state.routing_decision
+        try:
+            # Based on findings from different agents
+            high_priority_agents = [
+                name for name, result in state.agent_results.items()
+                if result and result.get("count", 0) > 0
+            ]
+
+            if "demand_deposit" in high_priority_agents:
+                recommendations.append("Implement proactive customer contact campaigns for inactive demand deposits")
+
+            if "fixed_deposit" in high_priority_agents:
+                recommendations.append("Review maturity notification processes and auto-renewal procedures")
+
+            if "contact_attempts" in high_priority_agents:
+                recommendations.append("Strengthen contact attempt documentation and tracking systems")
+
+            if "cb_transfer" in high_priority_agents:
+                recommendations.append("Prepare accounts for Central Bank transfer as per Article 8.1 requirements")
+
+            if len(high_priority_agents) > 3:
+                recommendations.append("Consider comprehensive dormancy management system upgrade")
+
+            recommendations.append("Regular quarterly reviews of dormancy classification criteria")
+            recommendations.append("Enhance data quality controls for critical dormancy tracking fields")
+
+        except Exception as e:
+            logger.warning(f"Recommendation generation failed: {e}")
+
+        return recommendations
 
     async def orchestrate_comprehensive_analysis(self, user_id: str, input_dataframe: pd.DataFrame,
                                                  report_date: str, analysis_config: Dict = None,
                                                  db_connection=None) -> Dict:
-        """Orchestrate comprehensive CBUAE dormancy analysis"""
+        """Orchestrate comprehensive CBUAE dormancy analysis with CSV data"""
         try:
-            # Update database connection if provided
-            if db_connection and not self.db_connection:
-                self.db_connection = db_connection
-                self.monitoring_system = initialize_dormancy_monitoring_system(db_connection)
-
-                # Update all agents with database connection
-                for agent in self.agents.values():
-                    agent.db_connection = db_connection
-                    if not agent.dormancy_monitoring:
-                        agent.dormancy_monitoring = DormancyMonitoringAgents(db_connection)
-
             # Create initial state
             initial_state = DormancyAnalysisState(
                 session_id=secrets.token_hex(16),
@@ -1926,17 +1772,18 @@ class DormancyWorkflowOrchestrator:
                 "success": False,
                 "error": str(e),
                 "session_id": initial_state.session_id if 'initial_state' in locals() else None,
-                "analysis_type": "comprehensive_cbuae_monitoring"
+                "analysis_type": "comprehensive_cbuae_monitoring_csv"
             }
 
 
-# Main Comprehensive Dormancy Analysis Agent
-class DormancyAnalysisAgent:
-    """Main comprehensive dormancy analysis agent using full CBUAE monitoring system"""
+# ===== MAIN COMPREHENSIVE DORMANCY ANALYSIS AGENT =====
 
-    def __init__(self, memory_agent, mcp_client: MCPClient, db_session=None):
-        self.memory_agent = memory_agent
-        self.mcp_client = mcp_client
+class DormancyAnalysisAgent:
+    """Main comprehensive dormancy analysis agent using CSV column names"""
+
+    def __init__(self, memory_agent=None, mcp_client: MCPClient = None, db_session=None):
+        self.memory_agent = memory_agent or MockMemoryAgent()
+        self.mcp_client = mcp_client or MCPClient()
         self.db_session = db_session
 
         try:
@@ -1947,9 +1794,9 @@ class DormancyAnalysisAgent:
         # Initialize comprehensive orchestrator
         self.orchestrator = DormancyWorkflowOrchestrator(memory_agent, mcp_client, db_session)
 
-    @traceable(name="comprehensive_dormancy_analysis")
+    @traceable(name="comprehensive_dormancy_analysis_csv")
     async def analyze_dormancy(self, state: DormancyAnalysisState) -> DormancyAnalysisState:
-        """Main comprehensive dormancy analysis using full CBUAE monitoring system"""
+        """Main comprehensive dormancy analysis using CSV column names"""
         try:
             start_time = datetime.now()
             state.analysis_status = DormancyStatus.PROCESSING
@@ -1963,6 +1810,9 @@ class DormancyAnalysisAgent:
                 raise ValueError("Empty account data provided")
 
             report_date = state.analysis_config.get('report_date', datetime.now().strftime("%Y-%m-%d"))
+
+            logger.info(f"Starting comprehensive dormancy analysis on {len(accounts_df)} accounts")
+            logger.info(f"Available columns: {list(accounts_df.columns)}")
 
             # Execute comprehensive orchestrated analysis
             orchestration_results = await self.orchestrator.orchestrate_comprehensive_analysis(
@@ -2000,78 +1850,120 @@ class DormancyAnalysisAgent:
                 # Log successful comprehensive analysis
                 state.analysis_log.append({
                     "timestamp": datetime.now().isoformat(),
-                    "stage": "comprehensive_dormancy_analysis",
+                    "stage": "comprehensive_dormancy_analysis_csv",
                     "status": "completed",
-                    "analysis_type": "full_cbuae_monitoring",
-                    "monitoring_system_used": orchestration_results.get("monitoring_system_used", False),
+                    "analysis_type": "full_cbuae_monitoring_with_csv",
                     "articles_covered": orchestration_results.get("total_cbuae_articles_covered", 0),
                     "compliance_status": orchestration_results.get("regulatory_compliance_status", "unknown"),
                     "total_findings": state.dormant_accounts_found,
-                    "processing_time": state.processing_time
+                    "processing_time": state.processing_time,
+                    "data_source": "banking_compliance_dataset_csv"
                 })
             else:
                 state.analysis_status = DormancyStatus.FAILED
                 error_msg = orchestration_results.get("error", "Unknown comprehensive analysis error")
                 state.error_log.append({
                     "timestamp": datetime.now().isoformat(),
-                    "stage": "comprehensive_orchestration",
+                    "stage": "comprehensive_orchestration_csv",
                     "error": error_msg,
-                    "analysis_type": "full_cbuae_monitoring"
+                    "analysis_type": "full_cbuae_monitoring_with_csv"
                 })
 
         except Exception as e:
             state.analysis_status = DormancyStatus.FAILED
             state.error_log.append({
                 "timestamp": datetime.now().isoformat(),
-                "stage": "comprehensive_dormancy_analysis",
+                "stage": "comprehensive_dormancy_analysis_csv",
                 "error": str(e),
-                "analysis_type": "full_cbuae_monitoring"
+                "analysis_type": "full_cbuae_monitoring_with_csv"
             })
             logger.error(f"Comprehensive dormancy analysis failed: {str(e)}")
 
         return state
 
 
-# Factory Functions and Utilities
-def create_comprehensive_dormancy_analysis(memory_agent, mcp_client: MCPClient,
+# ===== FACTORY FUNCTIONS AND UTILITIES =====
+
+def create_comprehensive_dormancy_analysis(memory_agent=None, mcp_client: MCPClient = None,
                                            db_session=None) -> DormancyAnalysisAgent:
     """Factory function to create comprehensive dormancy analysis agent"""
     return DormancyAnalysisAgent(memory_agent, mcp_client, db_session)
 
 
-def get_comprehensive_agents() -> List[str]:
-    """Get list of all comprehensive dormancy analysis agents"""
-    return [
-        "demand_deposit", "fixed_deposit", "investment", "safe_deposit", "payment_instruments",
-        "contact_attempts", "internal_ledger", "sdb_court_application", "record_retention",
-        "customer_claims", "proactive_contact", "statement_suppression",
-        "cb_transfer", "foreign_currency"
-    ]
+async def run_comprehensive_dormancy_analysis_csv(user_id: str, account_data: pd.DataFrame,
+                                                  report_date: str = None, db_connection=None,
+                                                  memory_agent=None, mcp_client: MCPClient = None) -> Dict:
+    """
+    Run a complete comprehensive dormancy analysis using CSV data
 
+    Args:
+        user_id: User identifier
+        account_data: DataFrame containing account information with CSV column names
+        report_date: Analysis report date (defaults to today)
+        db_connection: Database connection for monitoring system
+        memory_agent: Memory agent instance
+        mcp_client: MCP client instance
 
-def get_cbuae_articles_covered() -> Dict[str, str]:
-    """Get mapping of CBUAE articles to agent types"""
-    return {
-        "2.1.1": "demand_deposit",
-        "2.2": "fixed_deposit",
-        "2.3": "investment",
-        "2.4": "payment_instruments",
-        "2.6": "safe_deposit",
-        "3.1": "contact_attempts",
-        "3.4": "internal_ledger",
-        "3.7": "sdb_court_application",
-        "3.9": "record_retention",
-        "4": "customer_claims",
-        "5": "proactive_contact",
-        "7.3": "statement_suppression",
-        "8.1": "cb_transfer",
-        "8.5": "foreign_currency"
-    }
+    Returns:
+        Dictionary containing comprehensive analysis results
+    """
+    try:
+        # Initialize analysis agent
+        analysis_agent = DormancyAnalysisAgent(memory_agent, mcp_client, db_connection)
 
+        # Set default report date
+        if not report_date:
+            report_date = datetime.now().strftime("%Y-%m-%d")
 
-def setup_comprehensive_monitoring(db_connection) -> DormancyMonitoringAgents:
-    """Setup comprehensive monitoring system"""
-    return initialize_dormancy_monitoring_system(db_connection)
+        # Validate CSV columns
+        required_columns = [
+            'customer_id', 'account_id', 'account_type', 'account_status',
+            'last_transaction_date', 'balance_current'
+        ]
+
+        missing_columns = [col for col in required_columns if col not in account_data.columns]
+        if missing_columns:
+            logger.warning(f"Missing required columns: {missing_columns}")
+
+        # Create analysis state
+        analysis_state = DormancyAnalysisState(
+            session_id=secrets.token_hex(16),
+            user_id=user_id,
+            analysis_id=secrets.token_hex(16),
+            timestamp=datetime.now(),
+            processed_data={'accounts': account_data.to_dict('records')},
+            analysis_config={'report_date': report_date}
+        )
+
+        # Execute comprehensive analysis
+        final_state = await analysis_agent.analyze_dormancy(analysis_state)
+
+        # Return results
+        return {
+            "success": final_state.analysis_status == DormancyStatus.COMPLETED,
+            "session_id": final_state.session_id,
+            "analysis_results": final_state.dormancy_results,
+            "summary": final_state.dormancy_summary,
+            "total_accounts_analyzed": final_state.total_accounts_analyzed,
+            "dormant_accounts_found": final_state.dormant_accounts_found,
+            "high_risk_accounts": final_state.high_risk_accounts,
+            "processing_time_seconds": final_state.processing_time,
+            "compliance_flags": final_state.compliance_flags,
+            "analysis_log": final_state.analysis_log,
+            "error_log": final_state.error_log,
+            "data_quality": final_state.dormancy_summary.get("regulatory_reports", {}).get("data_quality_assessment",
+                                                                                           {}),
+            "recommendations": final_state.dormancy_summary.get("regulatory_reports", {}).get("recommendations", [])
+        }
+
+    except Exception as e:
+        logger.error(f"Comprehensive dormancy analysis failed: {str(e)}")
+        return {
+            "success": False,
+            "error": str(e),
+            "session_id": None,
+            "analysis_results": None
+        }
 
 
 # Export classes and functions for use by workflow engine
@@ -2087,19 +1979,81 @@ __all__ = [
     "DemandDepositDormancyAgent",
     "FixedDepositDormancyAgent",
     "InvestmentAccountDormancyAgent",
-    "SafeDepositBoxDormancyAgent",
     "PaymentInstrumentsDormancyAgent",
     "ContactAttemptsAgent",
     "InternalLedgerAgent",
-    "SDBCourtApplicationAgent",
-    "RecordRetentionAgent",
-    "CustomerClaimsAgent",
-    "ProactiveContactAgent",
-    "StatementSuppressionAgent",
     "CBTransferEligibilityAgent",
-    "ForeignCurrencyConversionAgent",
     "create_comprehensive_dormancy_analysis",
-    "get_comprehensive_agents",
-    "get_cbuae_articles_covered",
-    "setup_comprehensive_monitoring"
+    "run_comprehensive_dormancy_analysis_csv",
+    "MockMemoryAgent"
 ]
+
+# Example usage and testing
+if __name__ == "__main__":
+    import asyncio
+
+
+    async def test_csv_system():
+        """Test the CSV-based dormancy analysis system"""
+
+        print("=== CBUAE Dormancy Analysis System - CSV Integration ===")
+        print("Testing with actual CSV column names...")
+
+        # Create sample data matching CSV structure
+        sample_accounts = pd.DataFrame({
+            'customer_id': ['CUS770487', 'CUS865179', 'CUS133659'],
+            'customer_type': ['INDIVIDUAL', 'INDIVIDUAL', 'CORPORATE'],
+            'full_name_en': ['Ali Al-Zaabi', 'Fatima Al-Shamsi', 'Hassan Al-Suwaidi'],
+            'account_id': ['ACC2867825', 'ACC8707870', 'ACC6292423'],
+            'account_type': ['CURRENT', 'INVESTMENT', 'SAVINGS'],
+            'account_status': ['DORMANT', 'ACTIVE', 'DORMANT'],
+            'balance_current': [36849.91, 30964.14, 10710.06],
+            'last_transaction_date': ['2021-02-20', '2023-05-25', '2020-02-27'],
+            'has_outstanding_facilities': ['NO', 'YES', 'NO'],
+            'contact_attempts_made': [5, 0, 3],
+            'dormancy_status': ['FLAGGED', 'ACTIVE', 'CONTACTED'],
+            'current_stage': ['WAITING', 'ACTIVE', 'FLAGGED'],
+            'transfer_eligibility_date': ['2023-05-24', '2030-01-01', '2023-10-20'],
+            'transferred_to_cb_date': [None, None, None],
+            'maturity_date': [None, '2025-01-13', None],
+            'auto_renewal': [None, 'YES', None]
+        })
+
+        print(f"Sample Data: {len(sample_accounts)} accounts")
+        print(f"Columns: {list(sample_accounts.columns)}")
+
+        try:
+            # Test CSV-based comprehensive interface
+            print("\n--- Testing CSV-Based Comprehensive Analysis ---")
+            results = await run_comprehensive_dormancy_analysis_csv(
+                user_id="test_user",
+                account_data=sample_accounts,
+                report_date="2024-12-01"
+            )
+
+            print(f"CSV Analysis Results:")
+            print(f"  Success: {results['success']}")
+            print(f"  Total Accounts Analyzed: {results['total_accounts_analyzed']}")
+            print(f"  Dormant Accounts Found: {results['dormant_accounts_found']}")
+            print(f"  High Risk Accounts: {results['high_risk_accounts']}")
+            print(f"  Processing Time: {results['processing_time_seconds']:.2f} seconds")
+            print(f"  CBUAE Articles Covered: {len(results.get('compliance_flags', []))}")
+
+            if results['recommendations']:
+                print(f"\nRecommendations:")
+                for i, rec in enumerate(results['recommendations'], 1):
+                    print(f"  {i}. {rec}")
+
+            # Show data quality assessment
+            data_quality = results.get('data_quality', {})
+            if data_quality:
+                print(f"\nData Quality Score: {data_quality.get('overall_quality_score', 'N/A')}")
+
+        except Exception as e:
+            print(f"Test failed: {e}")
+
+        print("\n=== CSV Integration Test Complete ===")
+
+
+    # Run test
+    asyncio.run(test_csv_system())
