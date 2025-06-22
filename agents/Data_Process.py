@@ -219,11 +219,12 @@ class UnifiedDataProcessingAgent:
     def _load_banking_schema(self) -> Dict[str, Dict]:
         """Load CBUAE banking compliance schema"""
         return {
+            # Customer Information (8 fields)
             'customer_id': {
                 'description': 'Unique customer identifier',
                 'required': True,
                 'type': 'string',
-                'keywords': ['customer', 'client', 'id', 'identifier', 'cust']
+                'keywords': ['customer', 'client', 'id', 'identifier', 'cust', 'customer_id']
             },
             'customer_type': {
                 'description': 'Type of customer (Individual/Corporate)',
@@ -235,8 +236,142 @@ class UnifiedDataProcessingAgent:
                 'description': 'Customer full name in English',
                 'required': True,
                 'type': 'string',
-                'keywords': ['name', 'full_name', 'customer_name', 'client_name', 'english']
+                'keywords': ['name', 'full_name', 'customer_name', 'client_name', 'english', 'full_name_en']
             },
+            'full_name_ar': {
+                'description': 'Customer full name in Arabic',
+                'required': False,
+                'type': 'string',
+                'keywords': ['name_ar', 'full_name_ar', 'arabic', 'name_arabic', 'customer_name_ar']
+            },
+            'id_number': {
+                'description': 'Customer identification number',
+                'required': True,
+                'type': 'string',
+                'keywords': ['id_number', 'identification', 'id_no', 'emirates_id', 'passport']
+            },
+            'id_type': {
+                'description': 'Type of identification document',
+                'required': True,
+                'type': 'string',
+                'keywords': ['id_type', 'identification_type', 'doc_type', 'document_type']
+            },
+            'date_of_birth': {
+                'description': 'Customer date of birth',
+                'required': False,
+                'type': 'date',
+                'keywords': ['birth_date', 'dob', 'date_of_birth', 'birthday', 'birth']
+            },
+            'nationality': {
+                'description': 'Customer nationality',
+                'required': False,
+                'type': 'string',
+                'keywords': ['nationality', 'country', 'citizenship', 'nation', 'origin']
+            },
+
+            # Address Information (7 fields)
+            'address_line1': {
+                'description': 'Primary address line',
+                'required': False,
+                'type': 'string',
+                'keywords': ['address', 'address_line1', 'street', 'location', 'addr1']
+            },
+            'address_line2': {
+                'description': 'Secondary address line',
+                'required': False,
+                'type': 'string',
+                'keywords': ['address_line2', 'apartment', 'unit', 'building', 'addr2']
+            },
+            'city': {
+                'description': 'City of residence',
+                'required': False,
+                'type': 'string',
+                'keywords': ['city', 'town', 'municipality', 'location_city']
+            },
+            'emirate': {
+                'description': 'UAE Emirate',
+                'required': False,
+                'type': 'string',
+                'keywords': ['emirate', 'state', 'province', 'region', 'uae_emirate']
+            },
+            'country': {
+                'description': 'Country of residence',
+                'required': False,
+                'type': 'string',
+                'keywords': ['country', 'nation', 'residence_country', 'country_code']
+            },
+            'postal_code': {
+                'description': 'Postal or ZIP code',
+                'required': False,
+                'type': 'string',
+                'keywords': ['postal_code', 'zip', 'postcode', 'zip_code', 'postal']
+            },
+            'address_known': {
+                'description': 'Whether address is known/verified',
+                'required': False,
+                'type': 'string',
+                'keywords': ['address_known', 'verified', 'known', 'address_verified']
+            },
+
+            # Contact Information (6 fields)
+            'phone_primary': {
+                'description': 'Primary phone number',
+                'required': False,
+                'type': 'string',
+                'keywords': ['phone', 'mobile', 'telephone', 'contact', 'primary_phone', 'phone_primary']
+            },
+            'phone_secondary': {
+                'description': 'Secondary phone number',
+                'required': False,
+                'type': 'string',
+                'keywords': ['phone_secondary', 'secondary_phone', 'phone2', 'alternate_phone']
+            },
+            'email_primary': {
+                'description': 'Primary email address',
+                'required': False,
+                'type': 'string',
+                'keywords': ['email', 'email_address', 'contact_email', 'primary_email', 'email_primary']
+            },
+            'email_secondary': {
+                'description': 'Secondary email address',
+                'required': False,
+                'type': 'string',
+                'keywords': ['email_secondary', 'secondary_email', 'email2', 'alternate_email']
+            },
+            'last_contact_date': {
+                'description': 'Date of last contact attempt',
+                'required': False,
+                'type': 'date',
+                'keywords': ['last_contact_date', 'contact_date', 'last_contact', 'contact_attempt']
+            },
+            'last_contact_method': {
+                'description': 'Method of last contact attempt',
+                'required': False,
+                'type': 'string',
+                'keywords': ['contact_method', 'last_contact_method', 'method', 'contact_type']
+            },
+
+            # KYC and Risk (3 fields)
+            'kyc_status': {
+                'description': 'KYC compliance status',
+                'required': False,
+                'type': 'string',
+                'keywords': ['kyc', 'kyc_status', 'compliance', 'verification', 'know_your_customer']
+            },
+            'kyc_expiry_date': {
+                'description': 'KYC expiration date',
+                'required': False,
+                'type': 'date',
+                'keywords': ['kyc_expiry', 'kyc_expiry_date', 'expiry', 'kyc_expire']
+            },
+            'risk_rating': {
+                'description': 'Customer risk rating',
+                'required': False,
+                'type': 'string',
+                'keywords': ['risk', 'rating', 'risk_rating', 'risk_level', 'risk_score']
+            },
+
+            # Account Information (7 fields)
             'account_id': {
                 'description': 'Unique account identifier',
                 'required': True,
@@ -249,11 +384,29 @@ class UnifiedDataProcessingAgent:
                 'type': 'string',
                 'keywords': ['account_type', 'type', 'savings', 'current', 'fixed', 'deposit']
             },
+            'account_subtype': {
+                'description': 'Account subtype classification',
+                'required': False,
+                'type': 'string',
+                'keywords': ['account_subtype', 'subtype', 'sub_type', 'classification']
+            },
+            'account_name': {
+                'description': 'Account name or title',
+                'required': False,
+                'type': 'string',
+                'keywords': ['account_name', 'name', 'title', 'account_title']
+            },
+            'currency': {
+                'description': 'Account currency',
+                'required': False,
+                'type': 'string',
+                'keywords': ['currency', 'curr', 'aed', 'usd', 'eur', 'currency_code']
+            },
             'account_status': {
                 'description': 'Current status of account',
                 'required': True,
                 'type': 'string',
-                'keywords': ['status', 'account_status', 'active', 'dormant', 'closed']
+                'keywords': ['status', 'account_status', 'active', 'inactive', 'closed']
             },
             'dormancy_status': {
                 'description': 'Dormancy classification status',
@@ -261,11 +414,19 @@ class UnifiedDataProcessingAgent:
                 'type': 'string',
                 'keywords': ['dormancy', 'dormant', 'dormancy_status', 'classification']
             },
-            'balance_current': {
-                'description': 'Current account balance',
-                'required': True,
-                'type': 'float',
-                'keywords': ['balance', 'current_balance', 'amount', 'balance_current']
+
+            # Account Dates (4 fields)
+            'opening_date': {
+                'description': 'Account opening date',
+                'required': False,
+                'type': 'date',
+                'keywords': ['opening_date', 'opened', 'start_date', 'creation_date', 'open_date']
+            },
+            'closing_date': {
+                'description': 'Account closing date',
+                'required': False,
+                'type': 'date',
+                'keywords': ['closing_date', 'closed', 'close_date', 'closure_date']
             },
             'last_transaction_date': {
                 'description': 'Date of last customer transaction',
@@ -273,70 +434,291 @@ class UnifiedDataProcessingAgent:
                 'type': 'date',
                 'keywords': ['transaction_date', 'last_transaction', 'activity_date', 'last_activity']
             },
-            'phone_primary': {
-                'description': 'Primary phone number',
-                'required': False,
-                'type': 'string',
-                'keywords': ['phone', 'mobile', 'telephone', 'contact', 'primary_phone']
-            },
-            'email_primary': {
-                'description': 'Primary email address',
-                'required': False,
-                'type': 'string',
-                'keywords': ['email', 'email_address', 'contact_email', 'primary_email']
-            },
-            'date_of_birth': {
-                'description': 'Customer date of birth',
+            'last_system_transaction_date': {
+                'description': 'Date of last system transaction',
                 'required': False,
                 'type': 'date',
-                'keywords': ['birth_date', 'dob', 'date_of_birth', 'birthday']
+                'keywords': ['system_transaction', 'last_system_transaction', 'system_activity']
             },
-            'nationality': {
-                'description': 'Customer nationality',
+
+            # Balance Information (5 fields)
+            'balance_current': {
+                'description': 'Current account balance',
+                'required': True,
+                'type': 'float',
+                'keywords': ['balance', 'current_balance', 'amount', 'balance_current']
+            },
+            'balance_available': {
+                'description': 'Available account balance',
+                'required': False,
+                'type': 'float',
+                'keywords': ['balance_available', 'available', 'available_balance', 'usable_balance']
+            },
+            'balance_minimum': {
+                'description': 'Minimum required balance',
+                'required': False,
+                'type': 'float',
+                'keywords': ['balance_minimum', 'minimum', 'min_balance', 'minimum_balance']
+            },
+            'interest_rate': {
+                'description': 'Account interest rate',
+                'required': False,
+                'type': 'float',
+                'keywords': ['interest_rate', 'rate', 'interest', 'apr', 'yield']
+            },
+            'interest_accrued': {
+                'description': 'Accrued interest amount',
+                'required': False,
+                'type': 'float',
+                'keywords': ['interest_accrued', 'accrued', 'earned_interest', 'interest_earned']
+            },
+
+            # Account Details (7 fields)
+            'is_joint_account': {
+                'description': 'Whether account is joint account',
                 'required': False,
                 'type': 'string',
-                'keywords': ['nationality', 'country', 'citizenship', 'nation']
+                'keywords': ['joint', 'is_joint', 'joint_account', 'shared']
             },
-            'currency': {
-                'description': 'Account currency',
+            'joint_account_holders': {
+                'description': 'Number of joint account holders',
+                'required': False,
+                'type': 'integer',
+                'keywords': ['joint_holders', 'holders', 'joint_account_holders', 'co_holders']
+            },
+            'has_outstanding_facilities': {
+                'description': 'Whether account has outstanding facilities',
                 'required': False,
                 'type': 'string',
-                'keywords': ['currency', 'curr', 'aed', 'usd', 'eur']
+                'keywords': ['facilities', 'outstanding', 'has_facilities', 'credit_facilities']
             },
-            'opening_date': {
-                'description': 'Account opening date',
+            'maturity_date': {
+                'description': 'Account maturity date',
                 'required': False,
                 'type': 'date',
-                'keywords': ['opening_date', 'opened', 'start_date', 'creation_date']
+                'keywords': ['maturity', 'maturity_date', 'mature', 'expiry']
             },
-            'kyc_status': {
-                'description': 'KYC compliance status',
+            'auto_renewal': {
+                'description': 'Auto renewal setting',
                 'required': False,
                 'type': 'string',
-                'keywords': ['kyc', 'kyc_status', 'compliance', 'verification']
+                'keywords': ['auto_renewal', 'renewal', 'auto_renew', 'automatic']
             },
-            'risk_rating': {
-                'description': 'Customer risk rating',
+            'last_statement_date': {
+                'description': 'Date of last statement',
+                'required': False,
+                'type': 'date',
+                'keywords': ['statement_date', 'last_statement', 'statement', 'last_stmt']
+            },
+            'statement_frequency': {
+                'description': 'Statement generation frequency',
                 'required': False,
                 'type': 'string',
-                'keywords': ['risk', 'rating', 'risk_rating', 'risk_level']
+                'keywords': ['statement_frequency', 'frequency', 'stmt_freq', 'statement_cycle']
+            },
+
+            # Tracking and Processing (7 fields)
+            'tracking_id': {
+                'description': 'Unique tracking identifier',
+                'required': False,
+                'type': 'string',
+                'keywords': ['tracking_id', 'tracking', 'trace_id', 'reference']
+            },
+            'dormancy_trigger_date': {
+                'description': 'Date when dormancy was triggered',
+                'required': False,
+                'type': 'date',
+                'keywords': ['dormancy_trigger', 'trigger_date', 'dormant_since']
+            },
+            'dormancy_period_start': {
+                'description': 'Start of dormancy period',
+                'required': False,
+                'type': 'date',
+                'keywords': ['dormancy_start', 'period_start', 'dormant_from']
+            },
+            'dormancy_period_months': {
+                'description': 'Duration of dormancy in months',
+                'required': False,
+                'type': 'float',
+                'keywords': ['dormancy_months', 'period_months', 'months_dormant']
+            },
+            'dormancy_classification_date': {
+                'description': 'Date of dormancy classification',
+                'required': False,
+                'type': 'date',
+                'keywords': ['classification_date', 'dormancy_classification', 'classified_date']
+            },
+            'transfer_eligibility_date': {
+                'description': 'Date eligible for transfer',
+                'required': False,
+                'type': 'date',
+                'keywords': ['transfer_eligibility', 'eligible_date', 'transfer_date']
+            },
+            'current_stage': {
+                'description': 'Current processing stage',
+                'required': False,
+                'type': 'string',
+                'keywords': ['stage', 'current_stage', 'process_stage', 'workflow_stage']
+            },
+
+            # Contact Attempts (4 fields)
+            'contact_attempts_made': {
+                'description': 'Number of contact attempts made',
+                'required': False,
+                'type': 'integer',
+                'keywords': ['contact_attempts', 'attempts', 'contact_count', 'attempts_made']
+            },
+            'last_contact_attempt_date': {
+                'description': 'Date of last contact attempt',
+                'required': False,
+                'type': 'date',
+                'keywords': ['last_attempt', 'contact_attempt_date', 'attempt_date']
+            },
+            'waiting_period_start': {
+                'description': 'Start of waiting period',
+                'required': False,
+                'type': 'date',
+                'keywords': ['waiting_start', 'wait_period_start', 'waiting_period']
+            },
+            'waiting_period_end': {
+                'description': 'End of waiting period',
+                'required': False,
+                'type': 'date',
+                'keywords': ['waiting_end', 'wait_period_end', 'waiting_until']
+            },
+
+            # Transfer Information (5 fields)
+            'transferred_to_ledger_date': {
+                'description': 'Date transferred to ledger',
+                'required': False,
+                'type': 'date',
+                'keywords': ['ledger_transfer', 'transferred_ledger', 'ledger_date']
+            },
+            'transferred_to_cb_date': {
+                'description': 'Date transferred to Central Bank',
+                'required': False,
+                'type': 'date',
+                'keywords': ['cb_transfer', 'central_bank', 'cb_date', 'transferred_cb']
+            },
+            'cb_transfer_amount': {
+                'description': 'Amount transferred to Central Bank',
+                'required': False,
+                'type': 'float',
+                'keywords': ['cb_amount', 'transfer_amount', 'cb_transfer_amount']
+            },
+            'cb_transfer_reference': {
+                'description': 'Central Bank transfer reference',
+                'required': False,
+                'type': 'string',
+                'keywords': ['cb_reference', 'transfer_reference', 'cb_ref']
+            },
+            'exclusion_reason': {
+                'description': 'Reason for exclusion from process',
+                'required': False,
+                'type': 'string',
+                'keywords': ['exclusion', 'reason', 'exclusion_reason', 'excluded']
+            },
+
+            # System Fields (3 fields)
+            'created_date': {
+                'description': 'Record creation date',
+                'required': False,
+                'type': 'date',
+                'keywords': ['created', 'created_date', 'creation_date', 'date_created']
+            },
+            'updated_date': {
+                'description': 'Record last update date',
+                'required': False,
+                'type': 'date',
+                'keywords': ['updated', 'updated_date', 'modified', 'last_modified']
+            },
+            'updated_by': {
+                'description': 'User who last updated record',
+                'required': False,
+                'type': 'string',
+                'keywords': ['updated_by', 'modified_by', 'user', 'operator']
             }
         }
 
     def _load_column_patterns(self) -> Dict[str, List[str]]:
         """Load common column name patterns for mapping"""
         return {
-            'customer_id': ['customer_id', 'cust_id', 'client_id', 'customer_number', 'clientid'],
-            'account_id': ['account_id', 'account_number', 'acc_id', 'account_no', 'accountid'],
-            'full_name_en': ['name', 'full_name', 'customer_name', 'client_name', 'fullname'],
+            # Customer Information
+            'customer_id': ['customer_id', 'cust_id', 'client_id', 'customer_number', 'clientid', 'customer'],
+            'customer_type': ['customer_type', 'client_type', 'type', 'individual', 'corporate', 'cust_type'],
+            'full_name_en': ['name', 'full_name', 'customer_name', 'client_name', 'fullname', 'full_name_en'],
+            'full_name_ar': ['full_name_ar', 'name_ar', 'arabic_name', 'customer_name_ar', 'name_arabic'],
+            'id_number': ['id_number', 'identification', 'id_no', 'emirates_id', 'passport', 'id'],
+            'id_type': ['id_type', 'identification_type', 'doc_type', 'document_type'],
+            'date_of_birth': ['birth_date', 'dob', 'date_of_birth', 'birthday', 'birth'],
+            'nationality': ['nationality', 'country', 'citizenship', 'nation', 'origin'],
+
+            # Address Information
+            'address_line1': ['address', 'address_line1', 'street', 'location', 'addr1'],
+            'address_line2': ['address_line2', 'apartment', 'unit', 'building', 'addr2'],
+            'city': ['city', 'town', 'municipality', 'location_city'],
+            'emirate': ['emirate', 'state', 'province', 'region', 'uae_emirate'],
+            'country': ['country', 'nation', 'residence_country', 'country_code'],
+            'postal_code': ['postal_code', 'zip', 'postcode', 'zip_code', 'postal'],
+            'address_known': ['address_known', 'verified', 'known', 'address_verified'],
+
+            # Contact Information
+            'phone_primary': ['phone', 'mobile', 'telephone', 'contact_number', 'phone_number', 'phone_primary'],
+            'phone_secondary': ['phone_secondary', 'secondary_phone', 'phone2', 'alternate_phone'],
+            'email_primary': ['email', 'email_address', 'contact_email', 'primary_email', 'email_primary'],
+            'email_secondary': ['email_secondary', 'secondary_email', 'email2', 'alternate_email'],
+            'last_contact_date': ['last_contact_date', 'contact_date', 'last_contact', 'contact_attempt'],
+            'last_contact_method': ['contact_method', 'last_contact_method', 'method', 'contact_type'],
+
+            # Account Information
+            'account_id': ['account_id', 'account_number', 'acc_id', 'account_no', 'accountid', 'account'],
             'account_type': ['account_type', 'acc_type', 'type', 'product_type', 'accounttype'],
-            'balance_current': ['balance', 'current_balance', 'amount', 'bal', 'currentbalance'],
+            'account_subtype': ['account_subtype', 'subtype', 'sub_type', 'classification'],
+            'account_name': ['account_name', 'name', 'title', 'account_title'],
+            'currency': ['currency', 'curr', 'aed', 'usd', 'eur', 'currency_code'],
             'account_status': ['status', 'account_status', 'acc_status', 'state'],
             'dormancy_status': ['dormancy_status', 'dormant', 'dormancy', 'classification'],
+
+            # Balance and Financial
+            'balance_current': ['balance', 'current_balance', 'amount', 'bal', 'currentbalance', 'balance_current'],
+            'balance_available': ['balance_available', 'available', 'available_balance', 'usable_balance'],
+            'balance_minimum': ['balance_minimum', 'minimum', 'min_balance', 'minimum_balance'],
+            'interest_rate': ['interest_rate', 'rate', 'interest', 'apr', 'yield'],
+            'interest_accrued': ['interest_accrued', 'accrued', 'earned_interest', 'interest_earned'],
+
+            # Dates
+            'opening_date': ['opening_date', 'opened', 'start_date', 'creation_date', 'open_date'],
+            'closing_date': ['closing_date', 'closed', 'close_date', 'closure_date'],
             'last_transaction_date': ['last_transaction_date', 'transaction_date', 'last_activity', 'activity_date'],
-            'phone_primary': ['phone', 'mobile', 'telephone', 'contact_number', 'phone_number'],
-            'email_primary': ['email', 'email_address', 'contact_email', 'emailaddress']
+            'last_system_transaction_date': ['system_transaction', 'last_system_transaction', 'system_activity'],
+
+            # KYC and Risk
+            'kyc_status': ['kyc', 'kyc_status', 'compliance', 'verification', 'know_your_customer'],
+            'kyc_expiry_date': ['kyc_expiry', 'kyc_expiry_date', 'expiry', 'kyc_expire'],
+            'risk_rating': ['risk', 'rating', 'risk_rating', 'risk_level', 'risk_score'],
+
+            # Dormancy Processing
+            'dormancy_trigger_date': ['dormancy_trigger', 'trigger_date', 'dormant_since'],
+            'dormancy_period_start': ['dormancy_start', 'period_start', 'dormant_from'],
+            'dormancy_period_months': ['dormancy_months', 'period_months', 'months_dormant'],
+            'dormancy_classification_date': ['classification_date', 'dormancy_classification', 'classified_date'],
+            'transfer_eligibility_date': ['transfer_eligibility', 'eligible_date', 'transfer_date'],
+            'current_stage': ['stage', 'current_stage', 'process_stage', 'workflow_stage'],
+
+            # Contact Attempts
+            'contact_attempts_made': ['contact_attempts', 'attempts', 'contact_count', 'attempts_made'],
+            'last_contact_attempt_date': ['last_attempt', 'contact_attempt_date', 'attempt_date'],
+            'waiting_period_start': ['waiting_start', 'wait_period_start', 'waiting_period'],
+            'waiting_period_end': ['waiting_end', 'wait_period_end', 'waiting_until'],
+
+            # Transfers
+            'transferred_to_ledger_date': ['ledger_transfer', 'transferred_ledger', 'ledger_date'],
+            'transferred_to_cb_date': ['cb_transfer', 'central_bank', 'cb_date', 'transferred_cb'],
+            'cb_transfer_amount': ['cb_amount', 'transfer_amount', 'cb_transfer_amount'],
+            'cb_transfer_reference': ['cb_reference', 'transfer_reference', 'cb_ref'],
+            'exclusion_reason': ['exclusion', 'reason', 'exclusion_reason', 'excluded']
         }
+
 
     # =================== DATA UPLOAD METHODS ===================
 
