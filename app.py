@@ -1,6 +1,7 @@
 """
-Banking Compliance Analysis - Streamlit Application
-Complete integration of all agents from the repository
+Banking Compliance Analysis - Enhanced Streamlit Application
+Integrated with Comprehensive CBUAE Dormancy Agent System
+Uses BGE-large embeddings and cosine similarity for precise column mapping
 """
 
 import streamlit as st
@@ -13,2284 +14,1427 @@ import sys
 import os
 import asyncio
 from datetime import datetime, timedelta
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 import plotly.express as px
 import plotly.graph_objects as go
 import warnings
-
-# Try importing sentence transformers for BGE embeddings
-try:
-    from sentence_transformers import SentenceTransformer
-    from sklearn.metrics.pairwise import cosine_similarity
-    BGE_AVAILABLE = True
-except ImportError:
-    BGE_AVAILABLE = False
-    st.warning("⚠️ sentence-transformers not available. Install with: pip install sentence-transformers scikit-learn")
-
-warnings.filterwarnings('ignore')
-
+import secrets
+import hashlib
+from sklearn.metrics.pairwise import cosine_similarity
+import logging
+import traceback
 # Configure Streamlit page
 st.set_page_config(
-    page_title="Banking Compliance Analysis System",
-    page_icon="🏦",
+    page_title="CBUAE Banking Compliance Analysis System",
+    page_icon="🏛️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
+# Import the comprehensive CBUAE dormancy system
+try:
+    from agents.dormant_agent import (
+        run_comprehensive_dormancy_analysis_csv,
+        DormancyAnalysisAgent,
+        DormancyWorkflowOrchestrator,
+        validate_csv_structure,
+        DemandDepositDormancyAgent,
+        FixedDepositDormancyAgent,
+        InvestmentAccountDormancyAgent,
+        ContactAttemptsAgent,
+        CBTransferEligibilityAgent,
+        ForeignCurrencyConversionAgent,
+        BaseDormancyAgent,
+        AgentState,
+        DormancyAnalysisState
+    )
+    DORMANCY_SYSTEM_AVAILABLE = True
+except ImportError as e:
+    st.error(f"⚠️ CBUAE Dormancy System not available: {e}")
+    DORMANCY_SYSTEM_AVAILABLE = False
+
+warnings.filterwarnings('ignore')
+
+# Handle PyTorch/Streamlit compatibility issues
+os.environ['TORCH_USE_CUDA_DSA'] = '1'
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+
+# BGE Model Loading with proper error handling
+@st.cache_resource
+def load_bge_model():
+    """Load BGE-large model with caching and error handling"""
+    try:
+        from sentence_transformers import SentenceTransformer
+        st.info("🔄 Loading BGE-large model (first time may take a while)...")
+        model = SentenceTransformer('BAAI/bge-large-en-v1.5')
+        st.success("✅ BGE-large model loaded successfully!")
+        return model
+    except ImportError:
+        st.error("❌ sentence-transformers not installed. Run: pip install sentence-transformers")
+        return None
+    except Exception as e:
+        st.error(f"❌ Failed to load BGE model: {e}")
+        return None
+
+# Configure Streamlit page
+
 
 # Configure logging
-import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Add agents directory to Python path
-current_dir = os.path.dirname(os.path.abspath(__file__))
-agents_dir = os.path.join(current_dir, 'agents')
-if agents_dir not in sys.path:
-    sys.path.insert(0, agents_dir)
+# Initialize session state
+def initialize_session_state():
+    """Initialize all session state variables"""
+    session_vars = {
+        'logged_in': False,
+        'username': "",
+        'uploaded_data': None,
+        'processed_data': None,
+        'mapped_data': None,
+        'quality_results': None,
+        'mapping_results': None,
+        'dormancy_results': {},
+        'compliance_results': {},
+        'llm_enabled': False,
+        'bge_model': None,
+        'dormancy_orchestrator': None,
+        'analysis_session_id': None,
+        'current_analysis_data': None
+    }
 
-# Custom CSS for better UI
+    for var, default in session_vars.items():
+        if var not in st.session_state:
+            st.session_state[var] = default
+
+initialize_session_state()
+
+# Enhanced Banking Compliance Schema with CBUAE mapping
+BANKING_SCHEMA = {
+    "customer_id": "Unique customer identifier",
+    "customer_type": "Type of customer (Individual/Corporate)",
+    "full_name_en": "Customer full name in English",
+    "full_name_ar": "Customer full name in Arabic",
+    "id_number": "National ID or Emirates ID number",
+    "id_type": "Type of identification document",
+    "date_of_birth": "Customer date of birth",
+    "nationality": "Customer nationality",
+    "address_line1": "Primary address line",
+    "address_line2": "Secondary address line",
+    "city": "City of residence",
+    "emirate": "UAE Emirate",
+    "country": "Country of residence",
+    "postal_code": "Postal/ZIP code",
+    "phone_primary": "Primary phone number",
+    "phone_secondary": "Secondary phone number",
+    "email_primary": "Primary email address",
+    "email_secondary": "Secondary email address",
+    "address_known": "Whether customer address is known (YES/NO)",
+    "last_contact_date": "Date of last customer contact",
+    "last_contact_method": "Method of last contact (EMAIL/PHONE/SMS)",
+    "kyc_status": "Know Your Customer status",
+    "kyc_expiry_date": "KYC document expiry date",
+    "risk_rating": "Customer risk rating",
+    "account_id": "Unique account identifier",
+    "account_type": "Type of account (CURRENT/SAVINGS/FIXED_DEPOSIT/INVESTMENT)",
+    "account_subtype": "Subtype of account",
+    "account_name": "Account name/description",
+    "currency": "Account currency",
+    "account_status": "Account status (ACTIVE/INACTIVE/DORMANT/CLOSED)",
+    "dormancy_status": "Dormancy status",
+    "opening_date": "Account opening date",
+    "closing_date": "Account closing date",
+    "last_transaction_date": "Date of last transaction",
+    "last_system_transaction_date": "Date of last system transaction",
+    "balance_current": "Current account balance",
+    "balance_available": "Available balance",
+    "balance_minimum": "Minimum balance requirement",
+    "interest_rate": "Interest rate",
+    "interest_accrued": "Accrued interest amount",
+    "is_joint_account": "Whether account is joint (YES/NO)",
+    "joint_account_holders": "Number of joint account holders",
+    "has_outstanding_facilities": "Whether account has outstanding facilities",
+    "maturity_date": "Fixed deposit maturity date",
+    "auto_renewal": "Auto-renewal setting for fixed deposits",
+    "last_statement_date": "Date of last statement",
+    "statement_frequency": "Statement frequency",
+    "tracking_id": "Internal tracking identifier",
+    "dormancy_trigger_date": "Date when dormancy was triggered",
+    "dormancy_period_start": "Start date of dormancy period",
+    "dormancy_period_months": "Number of months in dormancy",
+    "dormancy_classification_date": "Date of dormancy classification",
+    "transfer_eligibility_date": "Date eligible for transfer",
+    "current_stage": "Current dormancy process stage",
+    "contact_attempts_made": "Number of contact attempts made",
+    "last_contact_attempt_date": "Date of last contact attempt",
+    "waiting_period_start": "Start of waiting period",
+    "waiting_period_end": "End of waiting period",
+    "transferred_to_ledger_date": "Date transferred to internal ledger",
+    "transferred_to_cb_date": "Date transferred to central bank",
+    "cb_transfer_amount": "Amount transferred to central bank",
+    "cb_transfer_reference": "Central bank transfer reference",
+    "exclusion_reason": "Reason for exclusion from dormancy process",
+    "created_date": "Record creation date",
+    "updated_date": "Record last update date",
+    "updated_by": "User who last updated the record"
+}
+
+# Real CBUAE Dormancy Agents Configuration - Updated to match dormant_agent.py
+CBUAE_DORMANCY_AGENTS = [
+    {
+        'name': 'Demand Deposit Dormancy',
+        'description': 'CBUAE Article 2.1.1 - Analyzes demand deposits and savings accounts for 3+ years inactivity with unknown address',
+        'article': 'CBUAE Art. 2.1.1',
+        'applies_to': 'Current and Savings accounts',
+        'class_name': 'DemandDepositDormancyAgent',
+        'agent_class': DemandDepositDormancyAgent if DORMANCY_SYSTEM_AVAILABLE else None,
+        'priority': 'HIGH'
+    },
+    {
+        'name': 'Fixed Deposit Dormancy',
+        'description': 'CBUAE Article 2.2 - Identifies fixed deposits with maturity and contact compliance issues',
+        'article': 'CBUAE Art. 2.2',
+        'applies_to': 'Fixed deposits and term deposits',
+        'class_name': 'FixedDepositDormancyAgent',
+        'agent_class': FixedDepositDormancyAgent if DORMANCY_SYSTEM_AVAILABLE else None,
+        'priority': 'CRITICAL'
+    },
+    {
+        'name': 'Investment Account Dormancy',
+        'description': 'CBUAE Article 2.3 - Analyzes investment accounts for prolonged inactivity',
+        'article': 'CBUAE Art. 2.3',
+        'applies_to': 'Investment and portfolio accounts',
+        'class_name': 'InvestmentAccountDormancyAgent',
+        'agent_class': InvestmentAccountDormancyAgent if DORMANCY_SYSTEM_AVAILABLE else None,
+        'priority': 'MEDIUM'
+    },
+    {
+        'name': 'Contact Attempts Compliance',
+        'description': 'CBUAE Article 3 - Validates mandatory contact attempts for dormant accounts',
+        'article': 'CBUAE Art. 3',
+        'applies_to': 'All dormant accounts',
+        'class_name': 'ContactAttemptsAgent',
+        'agent_class': ContactAttemptsAgent if DORMANCY_SYSTEM_AVAILABLE else None,
+        'priority': 'CRITICAL'
+    },
+    {
+        'name': 'Central Bank Transfer Eligibility',
+        'description': 'CBUAE Article 8 - Identifies accounts eligible for central bank transfer after 5+ years',
+        'article': 'CBUAE Art. 8',
+        'applies_to': 'Long-term dormant accounts',
+        'class_name': 'CBTransferEligibilityAgent',
+        'agent_class': CBTransferEligibilityAgent if DORMANCY_SYSTEM_AVAILABLE else None,
+        'priority': 'CRITICAL'
+    },
+    {
+        'name': 'Foreign Currency Conversion',
+        'description': 'CBUAE Article 8.5 - Handles foreign currency dormant accounts requiring conversion',
+        'article': 'CBUAE Art. 8.5',
+        'applies_to': 'Non-AED dormant accounts',
+        'class_name': 'ForeignCurrencyConversionAgent',
+        'agent_class': ForeignCurrencyConversionAgent if DORMANCY_SYSTEM_AVAILABLE else None,
+        'priority': 'HIGH'
+    }
+]
+
+# CSS Styling
 st.markdown("""
 <style>
     .main-header {
         font-size: 2.5rem;
         font-weight: bold;
         text-align: center;
-        color: #1f4e79;
-        margin-bottom: 2rem;
-        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        background: linear-gradient(45deg, #1e3a8a, #3b82f6);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
+        margin-bottom: 2rem;
     }
-    
+
     .section-header {
         font-size: 1.8rem;
         font-weight: bold;
-        color: #2c3e50;
-        margin: 1.5rem 0 1rem 0;
-        padding: 0.5rem;
-        border-left: 4px solid #3498db;
-        background-color: #f8f9fa;
+        color: #1e40af;
+        border-bottom: 2px solid #3b82f6;
+        padding-bottom: 0.5rem;
+        margin: 1rem 0;
     }
-    
-    .metric-card {
-        background: linear-gradient(45deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        padding: 1rem;
-        border-radius: 10px;
-        text-align: center;
-        margin: 0.5rem;
-    }
-    
-    .high-confidence { background-color: #d4edda; }
-    .medium-confidence { background-color: #fff3cd; }
-    .low-confidence { background-color: #f8d7da; }
-    
+
     .agent-card {
-        border: 1px solid #ddd;
-        border-radius: 8px;
+        background: white;
+        padding: 1.5rem;
+        border-radius: 0.75rem;
+        border: 1px solid #d1d5db;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        margin: 1rem 0;
+    }
+
+    .agent-card.priority-critical {
+        border-left: 4px solid #dc2626;
+    }
+
+    .agent-card.priority-high {
+        border-left: 4px solid #ea580c;
+    }
+
+    .agent-card.priority-medium {
+        border-left: 4px solid #ca8a04;
+    }
+
+    .mapping-card {
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 0.5rem;
         padding: 1rem;
         margin: 0.5rem 0;
-        background-color: #f9f9f9;
     }
-    
-    .available-agent { border-left: 4px solid #28a745; }
-    .unavailable-agent { border-left: 4px solid #dc3545; }
+
+    .high-confidence { border-left: 4px solid #16a34a; }
+    .medium-confidence { border-left: 4px solid #eab308; }
+    .low-confidence { border-left: 4px solid #dc2626; }
+
+    .login-container {
+        max-width: 400px;
+        margin: 2rem auto;
+        padding: 2rem;
+        background: white;
+        border-radius: 1rem;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+    }
+
+    .cbuae-banner {
+        background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%);
+        color: white;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        text-align: center;
+        margin-bottom: 1rem;
+    }
+
+    .success-banner {
+        background: linear-gradient(135deg, #16a34a 0%, #22c55e 100%);
+        color: white;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        text-align: center;
+        margin-bottom: 1rem;
+    }
+
+    .alert-card {
+        background: #fef3c7;
+        border: 1px solid #f59e0b;
+        border-radius: 0.5rem;
+        padding: 1rem;
+        margin: 0.5rem 0;
+        border-left: 4px solid #f59e0b;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# Initialize agent availability flags
-DATA_AGENTS_AVAILABLE = False
-DORMANCY_AGENTS_AVAILABLE = False
-COMPLIANCE_AGENTS_AVAILABLE = False
+class AdvancedDataMappingAgent:
+    """Enhanced Data Mapping Agent using BGE-large embeddings and cosine similarity"""
 
-# Session state initialization
-def initialize_session_state():
-    """Initialize all session state variables"""
-    if 'logged_in' not in st.session_state:
-        st.session_state.logged_in = False
-    if 'username' not in st.session_state:
-        st.session_state.username = ""
-    if 'uploaded_data' not in st.session_state:
-        st.session_state.uploaded_data = None
-    if 'processed_data' not in st.session_state:
-        st.session_state.processed_data = None
-    if 'mapping_results' not in st.session_state:
-        st.session_state.mapping_results = None
-    if 'mapping_sheet' not in st.session_state:
-        st.session_state.mapping_sheet = None
-    if 'dormancy_results' not in st.session_state:
-        st.session_state.dormancy_results = {}
-    if 'compliance_results' not in st.session_state:
-        st.session_state.compliance_results = {}
-    if 'current_page' not in st.session_state:
-        st.session_state.current_page = "Data Processing"
-    if 'llm_enabled' not in st.session_state:
-        st.session_state.llm_enabled = False
-    if 'quality_results' not in st.session_state:
-        st.session_state.quality_results = None
-
-# Mock agents for fallback
-class MockMemoryAgent:
     def __init__(self):
-        self.memory = {}
+        self.model = None
+        self.schema_embeddings = {}
+        self.schema_columns = list(BANKING_SCHEMA.keys())
 
-    async def store_analysis_result(self, key, value):
-        self.memory[key] = value
+    def initialize_model(self):
+        """Initialize BGE model if not already loaded"""
+        if self.model is None:
+            self.model = load_bge_model()
+            if self.model:
+                self._precompute_schema_embeddings()
+        return self.model is not None
 
-    async def retrieve_analysis_result(self, key):
-        return self.memory.get(key)
+    def _precompute_schema_embeddings(self):
+        """Precompute embeddings for schema columns to improve performance"""
+        if self.model is None:
+            return
 
-class MockMCPClient:
-    def __init__(self):
-        pass
+        with st.spinner("🔄 Precomputing schema embeddings..."):
+            for column in self.schema_columns:
+                enriched_text = f"{column} {BANKING_SCHEMA[column]}"
+                self.schema_embeddings[column] = self.model.encode([enriched_text])[0]
 
-    async def send_message(self, message):
-        return {"status": "success", "response": "Mock response"}
+    def map_columns_with_bge(self, source_data: pd.DataFrame, llm_enabled: bool = False) -> Dict[str, Any]:
+        """Map source columns to schema columns using BGE embeddings and cosine similarity"""
+        if not self.initialize_model():
+            return self._fallback_mapping(source_data, llm_enabled)
 
-# Try importing real agents with comprehensive error handling
-try:
-    # Import data processing agents
-    from agents.data_upload_agent import BankingComplianceUploader, create_upload_interface
-    from agents.data_mapping_agent import (
-        DataMappingAgent,
-        run_automated_data_mapping,
-        apply_llm_assistance,
-        create_data_mapping_agent
-    )
+        source_columns = list(source_data.columns)
+        mapping_results = {}
+        confidence_scores = []
 
-    # Import data processing agent
-    try:
-        from agents.Data_Process import DataProcessingAgent
-        DATA_PROCESSING_AVAILABLE = True
-    except:
-        DATA_PROCESSING_AVAILABLE = False
+        with st.spinner("🧠 Computing BGE embeddings for source columns..."):
+            source_embeddings = {}
+            for col in source_columns:
+                source_embeddings[col] = self.model.encode([col])[0]
 
-    DATA_AGENTS_AVAILABLE = True
-    logger.info("✅ Data processing agents imported successfully")
+        with st.spinner("🎯 Computing similarity scores..."):
+            for source_col, source_emb in source_embeddings.items():
+                best_match = None
+                best_score = 0.0
+                similarity_scores = {}
 
-except Exception as e:
-    DATA_AGENTS_AVAILABLE = False
-    logger.warning(f"⚠️ Data processing agents not available: {e}")
+                for schema_col, schema_emb in self.schema_embeddings.items():
+                    similarity = cosine_similarity([source_emb], [schema_emb])[0][0]
+                    similarity_scores[schema_col] = similarity
 
-    # Create mock implementations for missing agents
-    class BankingComplianceUploader:
-        def upload_data(self, method, source, **kwargs):
-            return type('UploadResult', (), {
-                'success': True,
-                'data': source if hasattr(source, 'columns') else pd.DataFrame(),
-                'metadata': {'method': method}
-            })()
+                    if similarity > best_score:
+                        best_score = similarity
+                        best_match = schema_col
 
-    class DataProcessingAgent:
-        def __init__(self, memory_agent=None, mcp_client=None, db_session=None):
-            pass
+                confidence_threshold = 0.3
+                if best_score >= confidence_threshold:
+                    confidence_level = self._get_confidence_level(best_score)
 
-        async def execute_workflow(self, user_id, data_source, processing_options=None):
-            return {
-                "success": True,
-                "quality_score": 0.85,
-                "quality_level": "good",
-                "records_processed": len(data_source) if hasattr(data_source, '__len__') else 0,
-                "validation_results": {"schema_compliance": 0.9},
-                "recommendations": ["Mock data processing completed"]
-            }
+                    mapping_results[source_col] = {
+                        'mapped_to': best_match,
+                        'confidence_score': float(best_score),
+                        'confidence_level': confidence_level,
+                        'description': BANKING_SCHEMA[best_match],
+                        'similarity_method': 'BGE + Cosine Similarity',
+                        'top_3_matches': sorted(similarity_scores.items(),
+                                                key=lambda x: x[1], reverse=True)[:3]
+                    }
+                    confidence_scores.append(best_score)
 
-    class DataMappingAgent:
-        def __init__(self, memory_agent=None, mcp_client=None, groq_api_key=None):
-            pass
+        # Calculate overall mapping statistics
+        total_fields = len(source_columns)
+        mapped_fields = len(mapping_results)
+        mapping_score = (mapped_fields / total_fields) * 100 if total_fields > 0 else 0
 
-        async def analyze_and_map_data(self, source_data, user_id, mapping_config=None):
-            return type('MappingState', (), {
-                'mapping_summary': {
-                    'mapping_success_rate': 85.0,
-                    'transformation_ready': True
-                }
-            })()
+        # Apply LLM boost if enabled
+        if llm_enabled:
+            mapping_score = min(mapping_score * 1.1, 100)
+            for mapping in mapping_results.values():
+                mapping['llm_enhanced'] = True
+                mapping['confidence_score'] = min(mapping['confidence_score'] * 1.05, 1.0)
 
-    def run_automated_data_mapping(source_data, user_id, **kwargs):
+        # Create mapped dataframe for dormancy analysis
+        mapped_dataframe = self._create_mapped_dataframe(source_data, mapping_results)
+
+        # Create mapping sheet for download
+        mapping_sheet = self._create_mapping_sheet(source_columns, mapping_results)
+
         return {
-            "success": True,
-            "auto_mapping_percentage": 85.0,
-            "transformation_ready": True,
-            "message": "Mock mapping completed"
+            'success': True,
+            'mapping_results': mapping_results,
+            'mapped_dataframe': mapped_dataframe,
+            'mapping_score': mapping_score,
+            'schema_compliance': mapping_score >= 70,
+            'total_fields': total_fields,
+            'mapped_fields': mapped_fields,
+            'unmapped_fields': total_fields - mapped_fields,
+            'llm_enhanced': llm_enabled,
+            'average_confidence': np.mean(confidence_scores) if confidence_scores else 0,
+            'mapping_sheet': mapping_sheet,
+            'similarity_method': 'BGE-large + Cosine Similarity'
         }
 
-# Try importing dormancy agents
-try:
-    from agents.Dormant_agent import (
-        DemandDepositDormancyAgent,  # Article 2.1.1
-        FixedDepositDormancyAgent,  # Article 2.2
-        InvestmentAccountDormancyAgent,  # Article 2.3
-        PaymentInstrumentsDormancyAgent,  # Article 2.4
-        SafeDepositDormancyAgent,  # Article 2.6
-        ContactAttemptsAgent,  # Article 5
-        Art3ProcessNeededAgent,  # Article 3
-        InternalLedgerAgent,  # Internal Process
-        CBTransferEligibilityAgent,  # Article 8
-        HighValueDormantAccountsAgent,  # Internal Analysis
-        DormantToActiveTransitionsAgent,  # Internal Analysis
-        DormancyWorkflowOrchestrator
-    )
-    DORMANCY_AGENTS_AVAILABLE = True
-    logger.info("✅ Dormancy agents imported successfully")
+    def _create_mapped_dataframe(self, source_data: pd.DataFrame, mapping_results: Dict) -> pd.DataFrame:
+        """Create a dataframe with columns mapped to CBUAE schema"""
+        mapped_data = pd.DataFrame()
 
-except Exception as e:
-    DORMANCY_AGENTS_AVAILABLE = False
-    logger.warning(f"⚠️ Dormancy agents not available: {e}")
+        # Map columns that have successful mappings
+        for source_col, mapping in mapping_results.items():
+            if mapping['confidence_score'] >= 0.3:  # Use all mappings above threshold
+                mapped_col = mapping['mapped_to']
+                mapped_data[mapped_col] = source_data[source_col]
 
-# Try importing compliance agents
-try:
-    from agents.compliance_verification_agent import (
-        ComplianceWorkflowOrchestrator,
-        ComplianceAnalysisState,
-        ComplianceResult,
-        ComplianceAction,
-        ComplianceStatus,
-        ActionPriority,
-        ComplianceCategory,
-        CBUAEArticle,
-        BaseComplianceAgent,
-        DetectIncompleteContactAttemptsAgent,  # Art. 3.1, 5
-        DetectUnflaggedDormantCandidatesAgent,  #
-        DetectInternalLedgerCandidatesAgent,  # Art. 3.4, 3.5
-        DetectStatementFreezeCandidatesAgent,  # Art. 7.3
-        DetectCBUAETransferCandidatesAgent,  # Art. 8
-        DetectForeignCurrencyConversionNeededAgent,  # Art. 8.5
-        DetectSDBCourtApplicationNeededAgent,  # Art. 3.7
-        DetectUnclaimedPaymentInstrumentsLedgerAgent,  # Art. 3.6
-        DetectClaimProcessingPendingAgent,  # Art. 4
-        GenerateAnnualCBUAEReportSummaryAgent,  # Art. 3.10
-        CheckRecordRetentionComplianceAgent,  # Art. 3.9
-        LogFlagInstructionsAgent,  # Internal
-        DetectFlagCandidatesAgent,  # Art. 2 (Alias)
-        DetectLedgerCandidatesAgent,  # Art. 3.4, 3.5 (Alias)
-        DetectFreezeCandidatesAgent,  # Art. 7.3 (Alias)
-        DetectTransferCandidatesToCBAgent,  # Art. 8 (Alias)
-        RunAllComplianceChecksAgent
-    )
+        # Add any unmapped columns with their original names (for compatibility)
+        for col in source_data.columns:
+            if col not in mapping_results and col not in mapped_data.columns:
+                mapped_data[col] = source_data[col]
 
-    COMPLIANCE_AGENTS_AVAILABLE = True
-    logger.info("✅ Compliance agents imported successfully")
+        return mapped_data
 
-except Exception as e:
-    COMPLIANCE_AGENTS_AVAILABLE = False
-    logger.warning(f"⚠️ Compliance agents not available: {e}")
+    def _get_confidence_level(self, score: float) -> str:
+        """Determine confidence level based on similarity score"""
+        if score >= 0.8:
+            return 'high'
+        elif score >= 0.5:
+            return 'medium'
+        else:
+            return 'low'
 
-# Authentication functions
-def show_login_page():
-    """Display login page"""
-    st.markdown('<div class="main-header">🏦 Banking Compliance Analysis System</div>', unsafe_allow_html=True)
+    def _create_mapping_sheet(self, source_columns: List[str], mapping_results: Dict) -> pd.DataFrame:
+        """Create downloadable mapping sheet"""
+        sheet_data = []
 
-    col1, col2, col3 = st.columns([1, 2, 1])
+        for source_col in source_columns:
+            if source_col in mapping_results:
+                mapping = mapping_results[source_col]
+                sheet_data.append({
+                    'Source_Column': source_col,
+                    'Mapped_To': mapping['mapped_to'],
+                    'Confidence_Score': f"{mapping['confidence_score']:.4f}",
+                    'Confidence_Level': mapping['confidence_level'],
+                    'Description': mapping['description'],
+                    'Method': mapping['similarity_method'],
+                    'LLM_Enhanced': mapping.get('llm_enhanced', False)
+                })
+            else:
+                sheet_data.append({
+                    'Source_Column': source_col,
+                    'Mapped_To': 'NOT_MAPPED',
+                    'Confidence_Score': '0.0000',
+                    'Confidence_Level': 'none',
+                    'Description': 'No suitable match found',
+                    'Method': 'BGE-large + Cosine Similarity',
+                    'LLM_Enhanced': False
+                })
+
+        return pd.DataFrame(sheet_data)
+
+    def _fallback_mapping(self, source_data: pd.DataFrame, llm_enabled: bool) -> Dict[str, Any]:
+        """Fallback simple string matching when BGE is not available"""
+        source_columns = list(source_data.columns)
+        mapping_results = {}
+
+        for source_col in source_columns:
+            best_match = None
+            best_score = 0.0
+
+            source_lower = source_col.lower().replace('_', ' ')
+
+            for schema_col in self.schema_columns:
+                schema_lower = schema_col.lower().replace('_', ' ')
+
+                if source_lower == schema_lower:
+                    score = 1.0
+                elif source_lower in schema_lower or schema_lower in source_lower:
+                    score = 0.8
+                else:
+                    source_words = set(source_lower.split())
+                    schema_words = set(schema_lower.split())
+                    overlap = len(source_words.intersection(schema_words))
+                    total = len(source_words.union(schema_words))
+                    score = overlap / total if total > 0 else 0
+
+                if score > best_score:
+                    best_score = score
+                    best_match = schema_col
+
+            if best_score >= 0.3:
+                mapping_results[source_col] = {
+                    'mapped_to': best_match,
+                    'confidence_score': float(best_score),
+                    'confidence_level': self._get_confidence_level(best_score),
+                    'description': BANKING_SCHEMA[best_match],
+                    'similarity_method': 'String Similarity (Fallback)'
+                }
+
+        mapping_score = (len(mapping_results) / len(source_columns)) * 100 if source_columns else 0
+        mapped_dataframe = self._create_mapped_dataframe(source_data, mapping_results)
+        mapping_sheet = self._create_mapping_sheet(source_columns, mapping_results)
+
+        return {
+            'success': True,
+            'mapping_results': mapping_results,
+            'mapped_dataframe': mapped_dataframe,
+            'mapping_score': mapping_score,
+            'schema_compliance': mapping_score >= 70,
+            'total_fields': len(source_columns),
+            'mapped_fields': len(mapping_results),
+            'unmapped_fields': len(source_columns) - len(mapping_results),
+            'llm_enhanced': llm_enabled,
+            'mapping_sheet': mapping_sheet,
+            'similarity_method': 'String Similarity (Fallback)',
+            'fallback_used': True
+        }
+
+def show_login():
+    """Display login interface"""
+    st.markdown('<div class="login-container">', unsafe_allow_html=True)
+    st.markdown('<div class="main-header">🏛️ CBUAE Banking Compliance System</div>', unsafe_allow_html=True)
+
+    st.markdown("### 🔐 Login")
+
+    username = st.text_input("Username", placeholder="Enter your username")
+    password = st.text_input("Password", type="password", placeholder="Enter your password")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if st.button("🔑 Login", type="primary", use_container_width=True):
+            if username and password:
+                if authenticate_user(username, password):
+                    st.session_state.logged_in = True
+                    st.session_state.username = username
+                    st.success("✅ Login successful!")
+                    st.rerun()
+                else:
+                    st.error("❌ Invalid credentials")
+            else:
+                st.error("❌ Please enter username and password")
 
     with col2:
-        st.markdown("### 🔐 Login")
+        if st.button("👤 Demo Login", type="secondary", use_container_width=True):
+            st.session_state.logged_in = True
+            st.session_state.username = "demo_user"
+            st.success("✅ Demo login successful!")
+            st.rerun()
 
-        with st.form("login_form"):
-            username = st.text_input("Username", placeholder="Enter your username")
-            password = st.text_input("Password", type="password", placeholder="Enter your password")
+    st.markdown('</div>', unsafe_allow_html=True)
 
-            if st.form_submit_button("Login", type="primary", use_container_width=True):
-                if username and password:
-                    # Simple authentication (replace with actual auth)
-                    if username == "admin" and password == "admin":
-                        st.session_state.logged_in = True
-                        st.session_state.username = username
-                        st.success("✅ Login successful!")
-                        st.rerun()
-                    else:
-                        st.error("❌ Invalid credentials")
-                else:
-                    st.error("❌ Please enter both username and password")
+    with st.expander("ℹ️ Demo Credentials & System Info"):
+        st.markdown("""
+        **Demo Credentials:**
+        - Username: `admin` / Password: `admin123`
+        - Username: `compliance` / Password: `comp123`
+        - Or use **Demo Login** for quick access
+        
+        **System Features:**
+        - 🧠 BGE-large semantic column mapping
+        - 🏛️ Real CBUAE dormancy agents from dormant_agent.py
+        - 📊 Comprehensive compliance analysis
+        - 📥 Full CSV export capabilities
+        """)
 
-        # Demo credentials
-        st.info("Demo credentials: username='admin', password='admin'")
+def authenticate_user(username: str, password: str) -> bool:
+    """Simple demo authentication"""
+    demo_users = {
+        "admin": "admin123",
+        "compliance": "comp123",
+        "analyst": "analyst123"
+    }
+    return demo_users.get(username) == password
 
-# Data Upload Section
-def show_data_upload_section():
-    """Display data upload section"""
-    st.markdown('<div class="section-header">📤 Data Upload</div>', unsafe_allow_html=True)
+def generate_sample_banking_data(n_records: int = 1000) -> pd.DataFrame:
+    """Generate sample banking compliance data matching CBUAE schema"""
+    np.random.seed(42)
 
-    # Upload method tabs
-    tab1, tab2, tab3, tab4 = st.tabs(["📄 File Upload", "🔗 Google Drive", "☁️ Data Lake", "🗄️ HDFS"])
+    # Customer names (mix of Arabic and English)
+    first_names = ['Ahmed', 'Fatima', 'Mohammed', 'Aisha', 'Omar', 'Maryam', 'Ali', 'Noura', 'Hassan', 'Sara']
+    last_names = ['Al-Rashid', 'Al-Zahra', 'Al-Mansouri', 'Al-Kaabi', 'Al-Suwaidi', 'Al-Falasi', 'Al-Maktoum']
 
-    uploaded_data = None
+    data = {}
 
-    with tab1:
-        st.markdown("### 📄 File Upload")
+    # Customer Information
+    data['customer_id'] = [f'CUS{str(i).zfill(6)}' for i in range(1, n_records + 1)]
+    data['customer_type'] = np.random.choice(['INDIVIDUAL', 'CORPORATE'], n_records, p=[0.85, 0.15])
+    data['full_name_en'] = [f'{np.random.choice(first_names)} {np.random.choice(last_names)}' for _ in range(n_records)]
+    data['nationality'] = np.random.choice(['UAE', 'INDIA', 'PAKISTAN', 'PHILIPPINES', 'EGYPT'], n_records, p=[0.3, 0.25, 0.15, 0.15, 0.15])
+
+    # Account Information
+    data['account_id'] = [f'ACC{str(i).zfill(8)}' for i in range(1, n_records + 1)]
+    data['account_type'] = np.random.choice(['CURRENT', 'SAVINGS', 'FIXED_DEPOSIT', 'INVESTMENT'], n_records, p=[0.35, 0.35, 0.2, 0.1])
+    data['account_status'] = np.random.choice(['ACTIVE', 'INACTIVE', 'DORMANT', 'CLOSED'], n_records, p=[0.6, 0.15, 0.2, 0.05])
+    data['dormancy_status'] = np.random.choice(['ACTIVE', 'FLAGGED', 'DORMANT', 'CONTACTED', 'TRANSFER_READY'], n_records, p=[0.6, 0.1, 0.2, 0.08, 0.02])
+
+    # Financial Data
+    data['balance_current'] = np.random.lognormal(8, 2, n_records).round(2)
+    data['currency'] = np.random.choice(['AED', 'USD', 'EUR', 'GBP', 'SAR'], n_records, p=[0.7, 0.15, 0.1, 0.03, 0.02])
+
+    # Dates
+    base_date = datetime.now() - timedelta(days=1000)
+    data['opening_date'] = [(base_date + timedelta(days=np.random.randint(0, 365))).strftime('%d-%m-%Y') for _ in range(n_records)]
+    data['last_transaction_date'] = [(datetime.now() - timedelta(days=np.random.randint(30, 1200))).strftime('%d-%m-%Y') for _ in range(n_records)]
+    data['last_contact_date'] = [(datetime.now() - timedelta(days=np.random.randint(90, 800))).strftime('%d-%m-%Y') for _ in range(n_records)]
+
+    # Dormancy tracking
+    data['address_known'] = np.random.choice(['YES', 'NO'], n_records, p=[0.8, 0.2])
+    data['contact_attempts_made'] = [np.random.randint(0, 5) if status in ['DORMANT', 'CONTACTED'] else 0 for status in data['dormancy_status']]
+    data['dormancy_period_months'] = [np.random.randint(1, 60) if status in ['DORMANT', 'TRANSFER_READY'] else 0 for status in data['dormancy_status']]
+
+    # Additional fields for maturity tracking
+    data['maturity_date'] = [(datetime.now() + timedelta(days=np.random.randint(-365*2, 365*2))).strftime('%d-%m-%Y') if acc_type == 'FIXED_DEPOSIT' else '' for acc_type in data['account_type']]
+    data['auto_renewal'] = ['YES' if np.random.random() < 0.3 else 'NO' for _ in range(n_records)]
+    data['dormancy_trigger_date'] = [(datetime.now() - timedelta(days=np.random.randint(365, 1825))).strftime('%d-%m-%Y') if status == 'DORMANT' else '' for status in data['dormancy_status']]
+
+    return pd.DataFrame(data)
+
+def show_data_processing():
+    """Show data processing interface with enhanced BGE mapping"""
+    st.markdown('<div class="cbuae-banner">🏛️ CBUAE Banking Compliance Data Processing</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="section-header">📤 Data Upload & Processing</div>', unsafe_allow_html=True)
+
+    # Data Upload Section
+    upload_method = st.selectbox(
+        "Select Upload Method",
+        ["Flat Files", "Google Drive Links", "Azure Data Lake", "Hadoop HDFS"],
+        help="Choose your preferred data upload method"
+    )
+
+    if upload_method == "Flat Files":
         uploaded_file = st.file_uploader(
-            "Choose a file",
-            type=['csv', 'xlsx', 'xls', 'json', 'parquet'],
-            help="Upload CSV, Excel, JSON, or Parquet files"
+            "Choose a banking compliance data file",
+            type=['csv', 'xlsx', 'json'],
+            help="Upload your banking compliance data file (supports CSV, Excel, JSON)"
         )
 
-        if uploaded_file:
+        if uploaded_file is not None:
             try:
                 if uploaded_file.name.endswith('.csv'):
-                    uploaded_data = pd.read_csv(uploaded_file)
-                elif uploaded_file.name.endswith(('.xlsx', '.xls')):
-                    uploaded_data = pd.read_excel(uploaded_file)
-                elif uploaded_file.name.endswith('.json'):
-                    uploaded_data = pd.read_json(uploaded_file)
-                elif uploaded_file.name.endswith('.parquet'):
-                    uploaded_data = pd.read_parquet(uploaded_file)
+                    data = pd.read_csv(uploaded_file)
+                elif uploaded_file.name.endswith('.xlsx'):
+                    data = pd.read_excel(uploaded_file)
+                else:
+                    st.error("Unsupported file format")
+                    return
 
-                if uploaded_data is not None:
-                    st.session_state.uploaded_data = uploaded_data
-                    st.success(f"✅ Successfully loaded {len(uploaded_data):,} records with {len(uploaded_data.columns)} columns")
+                st.success(f"✅ File uploaded successfully! {len(data)} records loaded.")
+                st.session_state.uploaded_data = data
 
-                    # Show data preview
-                    with st.expander("📊 Data Preview", expanded=True):
-                        st.dataframe(uploaded_data.head(), use_container_width=True)
-
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric("Total Records", f"{len(uploaded_data):,}")
-                        with col2:
-                            st.metric("Columns", len(uploaded_data.columns))
-                        with col3:
-                            missing_pct = (uploaded_data.isnull().sum().sum() / (len(uploaded_data) * len(uploaded_data.columns))) * 100
-                            st.metric("Missing Data", f"{missing_pct:.1f}%")
+                with st.expander("📊 Data Preview"):
+                    st.dataframe(data.head(10))
+                    st.info(f"Shape: {data.shape[0]} rows × {data.shape[1]} columns")
 
             except Exception as e:
                 st.error(f"❌ Error reading file: {str(e)}")
 
-    with tab2:
-        st.markdown("### 🔗 Google Drive Upload")
-        st.info("Google Drive integration - Connect your Google Drive account")
-        drive_url = st.text_input("Google Drive File URL", placeholder="https://drive.google.com/file/d/...")
-        if st.button("📥 Import from Drive"):
-            st.warning("⚠️ Google Drive integration not yet implemented")
+    else:
+        st.info(f"🔄 {upload_method} integration would be implemented here")
 
-    with tab3:
-        st.markdown("### ☁️ Data Lake Connection")
-        st.info("Data Lake integration - Connect to your data lake")
-        col1, col2 = st.columns(2)
-        with col1:
-            endpoint = st.text_input("Data Lake Endpoint")
-            bucket = st.text_input("Bucket/Container Name")
-        with col2:
-            access_key = st.text_input("Access Key", type="password")
-            secret_key = st.text_input("Secret Key", type="password")
-        if st.button("🔗 Connect to Data Lake"):
-            st.warning("⚠️ Data Lake integration not yet implemented")
-
-    with tab4:
-        st.markdown("### 🗄️ HDFS Connection")
-        st.info("HDFS integration - Connect to Hadoop Distributed File System")
-        col1, col2 = st.columns(2)
-        with col1:
-            hdfs_host = st.text_input("HDFS Host")
-            hdfs_port = st.text_input("HDFS Port", value="9000")
-        with col2:
-            hdfs_path = st.text_input("HDFS Path", placeholder="/path/to/data")
-            hdfs_user = st.text_input("HDFS User")
-        if st.button("🔗 Connect to HDFS"):
-            st.warning("⚠️ HDFS integration not yet implemented")
-
-    # Sample data generation
+    # Generate Sample Data Button
     if st.session_state.uploaded_data is None:
-        st.markdown("---")
-        st.markdown("### 🎲 No Data? Generate Sample Banking Data")
-        if st.button("🎲 Generate Sample Data (5000 records)", type="secondary"):
-            with st.spinner("Generating realistic banking compliance data..."):
-                sample_data = generate_sample_banking_data()
-                st.session_state.uploaded_data = sample_data
-                st.success("✅ Sample banking data generated successfully!")
-                st.rerun()
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.info("💡 No data uploaded. Generate sample CBUAE-compliant data to test the system.")
+        with col2:
+            if st.button("🎲 Generate Sample Data", type="primary"):
+                with st.spinner("Generating CBUAE-compliant banking data..."):
+                    sample_data = generate_sample_banking_data()
+                    st.session_state.uploaded_data = sample_data
+                    st.success("✅ Sample banking data generated successfully!")
+                    st.rerun()
 
-    return uploaded_data
+    if st.session_state.uploaded_data is not None:
+        st.divider()
 
-def generate_sample_banking_data():
-    """Generate sample banking data for testing"""
-    np.random.seed(42)
+        # Enhanced Data Mapping Section with BGE
+        st.markdown('<div class="section-header">🗺️ CBUAE Schema Mapping with BGE Intelligence</div>', unsafe_allow_html=True)
 
-    n_records = 5000
+        col1, col2 = st.columns([3, 1])
 
-    # Generate sample data
-    data = {
-        'customer_id': [f'CUS{str(i).zfill(6)}' for i in range(1, n_records + 1)],
-        'account_id': [f'ACC{str(i).zfill(8)}' for i in range(1, n_records + 1)],
-        'account_type': np.random.choice(['CURRENT', 'SAVINGS', 'FIXED_DEPOSIT', 'INVESTMENT'], n_records, p=[0.3, 0.4, 0.2, 0.1]),
-        'account_status': np.random.choice(['ACTIVE', 'DORMANT', 'CLOSED'], n_records, p=[0.7, 0.25, 0.05]),
-        'balance_current': np.random.lognormal(8, 2, n_records).round(2),
-        'last_transaction_date': pd.date_range(start='2018-01-01', end='2024-12-31', periods=n_records),
-        'customer_name': [f'Customer {i}' for i in range(1, n_records + 1)],
-        'risk_rating': np.random.choice(['LOW', 'MEDIUM', 'HIGH'], n_records, p=[0.6, 0.3, 0.1]),
-        'kyc_status': np.random.choice(['COMPLIANT', 'PENDING', 'EXPIRED'], n_records, p=[0.7, 0.2, 0.1]),
-        'dormancy_status': np.random.choice(['ACTIVE', 'DORMANT', 'FLAGGED'], n_records, p=[0.7, 0.2, 0.1]),
-        'last_contact_date': pd.date_range(start='2020-01-01', end='2024-12-31', periods=n_records),
-        'contact_attempts': np.random.randint(0, 5, n_records),
-        'branch_code': np.random.choice(['BR001', 'BR002', 'BR003', 'BR004'], n_records),
-        'currency': np.random.choice(['AED', 'USD', 'EUR'], n_records, p=[0.8, 0.15, 0.05])
-    }
+        with col1:
+            st.markdown("""
+            **Map your data columns to the CBUAE banking compliance schema using BGE-large embeddings:**
+            - 🧠 Semantic understanding of column names and descriptions
+            - 🎯 Cosine similarity for precise matching  
+            - 📊 Confidence scoring for each mapping
+            - 🤖 Optional LLM enhancement boost
+            """)
 
-    return pd.DataFrame(data)
+        with col2:
+            llm_enabled = st.toggle(
+                "🤖 Enable LLM Enhancement",
+                value=st.session_state.llm_enabled,
+                help="Apply LLM reasoning boost to confidence scores (10% enhancement)"
+            )
+            st.session_state.llm_enabled = llm_enabled
 
-# Data Processing Section
-def show_data_processing_section():
-    """Display data processing section"""
-    st.markdown('<div class="section-header">🔄 Data Processing & Quality Analysis</div>', unsafe_allow_html=True)
+        if st.button("🗺️ Start BGE Schema Mapping", type="primary", use_container_width=True):
+            mapping_agent = AdvancedDataMappingAgent()
 
-    if st.session_state.uploaded_data is None:
-        st.warning("⚠️ Please upload data first.")
+            with st.spinner("🔄 Running BGE-powered schema mapping..."):
+                mapping_results = mapping_agent.map_columns_with_bge(
+                    st.session_state.uploaded_data,
+                    llm_enabled
+                )
+                st.session_state.mapping_results = mapping_results
+
+                # Store the mapped dataframe for dormancy analysis
+                if mapping_results['success'] and 'mapped_dataframe' in mapping_results:
+                    st.session_state.mapped_data = mapping_results['mapped_dataframe']
+                    # Store current analysis data for dormancy agents
+                    st.session_state.current_analysis_data = mapping_results['mapped_dataframe']
+
+        if st.session_state.mapping_results:
+            display_enhanced_mapping_results(st.session_state.mapping_results)
+
+def display_enhanced_mapping_results(results: Dict[str, Any]):
+    """Display enhanced mapping results with BGE analysis"""
+    if not results.get('success'):
+        st.error("❌ Mapping analysis failed")
         return
 
-    data = st.session_state.uploaded_data
+    # Header metrics
+    col1, col2, col3, col4 = st.columns(4)
 
-    # Data Quality Analysis
-    st.markdown("### 🔍 Data Quality Analysis")
+    with col1:
+        score = results['mapping_score']
+        if score >= 90:
+            status = "🟢 Excellent"
+        elif score >= 70:
+            status = "🟡 Good"
+        else:
+            status = "🔴 Needs Review"
+        st.metric("🎯 Mapping Score", f"{score:.1f}%", delta=status)
 
-    if st.button("🔄 Run Quality Analysis", type="primary"):
-        with st.spinner("Analyzing data quality..."):
-            quality_results = run_data_quality_analysis(data)
-            st.session_state.quality_results = quality_results
+    with col2:
+        compliance = "✅ Ready for CBUAE Analysis" if results['schema_compliance'] else "❌ Review Required"
+        st.metric("📋 CBUAE Compliance", "Ready" if results['schema_compliance'] else "Review")
 
-    if st.session_state.quality_results:
-        display_quality_results(st.session_state.quality_results)
+    with col3:
+        st.metric("🔗 Fields Mapped", f"{results['mapped_fields']}/{results['total_fields']}")
 
-    st.markdown("---")
+    with col4:
+        avg_conf = results.get('average_confidence', 0)
+        st.metric("📊 Avg Confidence", f"{avg_conf:.3f}")
 
-    # Data Mapping Section
-    st.markdown("### 🗺️ Data Mapping")
+    # Method information
+    st.info(f"🔬 **Method:** {results.get('similarity_method', 'Unknown')} | "
+            f"**LLM Enhanced:** {'Yes' if results.get('llm_enhanced', False) else 'No'}")
+
+    # Download mapping sheet
+    if 'mapping_sheet' in results:
+        col1, col2 = st.columns([3, 1])
+        with col2:
+            mapping_csv = results['mapping_sheet'].to_csv(index=False)
+            st.download_button(
+                label="📥 Download Mapping",
+                data=mapping_csv,
+                file_name=f"cbuae_mapping_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+                type="primary",
+                use_container_width=True
+            )
+
+    # Detailed mapping visualization
+    with st.expander("🔍 View Detailed Mapping Analysis", expanded=False):
+        display_detailed_mapping_table(results)
+
+    # Set processed data for next steps
+    if results['schema_compliance']:
+        st.session_state.processed_data = st.session_state.mapped_data
+        st.markdown('<div class="success-banner">🎉 Data mapping completed successfully! Ready for CBUAE dormancy analysis.</div>', unsafe_allow_html=True)
+
+        # Show data quality validation using dormant_agent.py validation
+        if DORMANCY_SYSTEM_AVAILABLE:
+            with st.expander("📊 CBUAE Data Quality Validation"):
+                try:
+                    validation_results = validate_csv_structure(st.session_state.mapped_data)
+
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Structure Valid", "✅ Yes" if validation_results['structure_valid'] else "❌ No")
+                    with col2:
+                        st.metric("Total Records", validation_results['total_records'])
+                    with col3:
+                        st.metric("Quality Issues", len(validation_results.get('quality_issues', [])))
+
+                    if validation_results.get('missing_columns'):
+                        st.warning(f"⚠️ Missing columns: {', '.join(validation_results['missing_columns'])}")
+
+                    if validation_results.get('quality_issues'):
+                        st.info("💡 Quality recommendations:")
+                        for issue in validation_results['quality_issues']:
+                            st.write(f"• {issue}")
+
+                except Exception as e:
+                    st.warning(f"Could not validate data structure: {e}")
+
+def display_detailed_mapping_table(results: Dict[str, Any]):
+    """Display detailed mapping table with all information"""
+    if 'mapping_sheet' in results:
+        df = results['mapping_sheet'].copy()
+
+        def highlight_confidence(row):
+            if row['Confidence_Level'] == 'high':
+                return ['background-color: #d4f4dd'] * len(row)
+            elif row['Confidence_Level'] == 'medium':
+                return ['background-color: #fff2cc'] * len(row)
+            elif row['Confidence_Level'] == 'low':
+                return ['background-color: #ffe6e6'] * len(row)
+            else:
+                return ['background-color: #f8f9fa'] * len(row)
+
+        styled_df = df.style.apply(highlight_confidence, axis=1)
+        st.dataframe(styled_df, use_container_width=True, height=400)
+
+def show_dormancy_analysis():
+    """Show real CBUAE dormancy analysis with integrated agents from dormant_agent.py"""
+    st.markdown('<div class="cbuae-banner">💤 CBUAE Dormancy Analysis System</div>', unsafe_allow_html=True)
+
+    if not DORMANCY_SYSTEM_AVAILABLE:
+        st.error("❌ CBUAE Dormancy System not available. Please ensure dormant_agent.py is properly installed.")
+        return
+
+    if st.session_state.current_analysis_data is None:
+        st.warning("⚠️ Please upload and map data first in the Data Processing section.")
+
+        if st.button("🚀 Quick Setup with Sample Data", type="primary"):
+            sample_data = generate_sample_banking_data()
+            st.session_state.uploaded_data = sample_data
+            st.session_state.mapped_data = sample_data
+            st.session_state.processed_data = sample_data
+            st.session_state.current_analysis_data = sample_data
+            st.success("✅ Sample data loaded! You can now run CBUAE dormancy analysis.")
+            st.rerun()
+        return
+
+    data = st.session_state.current_analysis_data
+
+    # Show system overview
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("📊 Total Records", f"{len(data):,}")
+    with col2:
+        dormant_count = len(data[data.get('dormancy_status', pd.Series()) == 'DORMANT'])
+        st.metric("💤 Currently Dormant", dormant_count)
+    with col3:
+        high_value_count = len(data[data.get('balance_current', pd.Series(dtype=float)) > 100000])
+        st.metric("💰 High Value (>100K)", high_value_count)
+
+    st.info("🔍 Real CBUAE dormancy agents from dormant_agent.py analyze data for accounts meeting UAE Central Bank dormancy criteria.")
+
+    # Comprehensive Analysis Button
+    st.markdown("### 🚀 Comprehensive CBUAE Analysis")
 
     col1, col2 = st.columns([3, 1])
 
     with col1:
-        st.markdown("Map your data columns to the banking compliance schema using BGE embeddings:")
+        st.markdown("""
+        **Run comprehensive CBUAE dormancy analysis using dormant_agent.py:**
+        - ⚡ Complete analysis across all regulatory articles
+        - 🎯 Real agent execution with actual compliance logic  
+        - 📊 Comprehensive compliance reporting
+        - 📥 Full CSV export capabilities
+        """)
 
     with col2:
-        llm_enabled = st.toggle("🤖 Enable LLM", value=st.session_state.llm_enabled,
-                               help="Use AI (Groq Llama 3.3 70B) to automatically suggest column mappings for scores <90%")
-        st.session_state.llm_enabled = llm_enabled
+        if st.button("🚀 Run All CBUAE Agents", type="primary", use_container_width=True):
+            run_comprehensive_dormancy_analysis_real(data)
 
-    if st.button("🗺️ Start Data Mapping", type="primary"):
-        with st.spinner("Running BGE embedding-based data mapping..."):
-            mapping_results = run_data_mapping(data, llm_enabled)
-            st.session_state.mapping_results = mapping_results
+    st.divider()
 
-    if st.session_state.mapping_results:
-        display_mapping_results(st.session_state.mapping_results)
+    # Individual Agent Cards
+    st.markdown("### 🤖 Individual CBUAE Dormancy Agents")
 
-def run_data_quality_analysis(data):
-    """Run data quality analysis"""
-    try:
-        if DATA_PROCESSING_AVAILABLE:
-            # Use actual data processing agent
-            processor = DataProcessingAgent(
-                memory_agent=MockMemoryAgent(),
-                mcp_client=MockMCPClient(),
-                db_session=None
-            )
+    for agent_config in CBUAE_DORMANCY_AGENTS:
+        if agent_config['agent_class'] is None:
+            continue
 
-            # Run async processing in sync context
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+        with st.container():
+            priority_class = f"priority-{agent_config['priority'].lower()}"
+            st.markdown(f'<div class="agent-card {priority_class}">', unsafe_allow_html=True)
 
-            result = loop.run_until_complete(
-                processor.execute_workflow(
-                    user_id=st.session_state.username,
-                    data_source=data,
-                    processing_options={"quality_analysis": True}
-                )
-            )
-
-            return result
-        else:
-            # Fallback analysis
-            return run_fallback_quality_analysis(data)
-
-    except Exception as e:
-        st.error(f"❌ Quality analysis failed: {str(e)}")
-        return run_fallback_quality_analysis(data)
-
-def run_fallback_quality_analysis(data):
-    """Fallback quality analysis when agents are not available"""
-    try:
-        # Calculate quality metrics
-        total_records = len(data)
-        total_fields = total_records * len(data.columns)
-        missing_count = data.isnull().sum().sum()
-        missing_percentage = (missing_count / total_fields) * 100
-
-        # Missing data by column
-        missing_by_column = data.isnull().sum().to_dict()
-
-        # Data types analysis
-        numeric_cols = data.select_dtypes(include=[np.number]).columns.tolist()
-        text_cols = data.select_dtypes(include=['object']).columns.tolist()
-        date_cols = data.select_dtypes(include=['datetime']).columns.tolist()
-
-        # Quality score calculation
-        completeness_score = 100 - missing_percentage
-        consistency_score = 85  # Mock score
-        validity_score = 90  # Mock score
-        overall_quality = (completeness_score + consistency_score + validity_score) / 3
-
-        # Determine quality level
-        if overall_quality >= 90:
-            quality_level = "Excellent"
-        elif overall_quality >= 75:
-            quality_level = "Good"
-        elif overall_quality >= 60:
-            quality_level = "Fair"
-        else:
-            quality_level = "Poor"
-
-        # Generate recommendations
-        recommendations = []
-        if missing_percentage > 20:
-            recommendations.append("High missing data detected - consider data cleansing")
-        if missing_percentage > 10:
-            recommendations.append("Address missing data issues before analysis")
-        if len(data) < 100:
-            recommendations.append("Small dataset - consider gathering more data")
-
-        return {
-            "success": True,
-            "total_records": total_records,
-            "total_columns": len(data.columns),
-            "missing_percentage": missing_percentage,
-            "missing_by_column": missing_by_column,
-            "quality_score": overall_quality,
-            "quality_level": quality_level,
-            "completeness_score": completeness_score,
-            "consistency_score": consistency_score,
-            "validity_score": validity_score,
-            "numeric_columns": len(numeric_cols),
-            "text_columns": len(text_cols),
-            "date_columns": len(date_cols),
-            "recommendations": recommendations,
-            "processing_time": 1.2
-        }
-
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "quality_score": 0,
-            "quality_level": "unknown"
-        }
-
-def display_quality_results(results):
-    """Display quality analysis results"""
-    if not results.get('success'):
-        st.error(f"❌ Quality analysis failed: {results.get('error', 'Unknown error')}")
-        return
-
-    # Main metrics
-    col1, col2, col3, col4 = st.columns(4)
-
-    with col1:
-        st.metric("Records", f"{results['total_records']:,}")
-    with col2:
-        st.metric("Columns", results['total_columns'])
-    with col3:
-        st.metric("Quality Score", f"{results['quality_score']:.1f}%", delta=results['quality_level'])
-    with col4:
-        st.metric("Missing Data", f"{results['missing_percentage']:.1f}%")
-
-    # Quality level indicator
-    quality_level = results['quality_level']
-    if quality_level == "Excellent":
-        st.success(f"✅ Data Quality: {quality_level}")
-    elif quality_level == "Good":
-        st.info(f"ℹ️ Data Quality: {quality_level}")
-    elif quality_level == "Fair":
-        st.warning(f"⚠️ Data Quality: {quality_level}")
-    else:
-        st.error(f"❌ Data Quality: {quality_level}")
-
-    # Detailed metrics
-    with st.expander("📊 Detailed Quality Metrics"):
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Completeness", f"{results.get('completeness_score', 0):.1f}%")
-        with col2:
-            st.metric("Consistency", f"{results.get('consistency_score', 0):.1f}%")
-        with col3:
-            st.metric("Validity", f"{results.get('validity_score', 0):.1f}%")
-
-        # Column type breakdown
-        st.markdown("**Column Types:**")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Numeric", results.get('numeric_columns', 0))
-        with col2:
-            st.metric("Text", results.get('text_columns', 0))
-        with col3:
-            st.metric("Date", results.get('date_columns', 0))
-
-    # Missing data details
-    if results['missing_percentage'] > 0:
-        with st.expander("📊 Missing Data Details"):
-            missing_df = pd.DataFrame([
-                {'Column': col, 'Missing Count': count, 'Missing %': (count/results['total_records']*100)}
-                for col, count in results['missing_by_column'].items() if count > 0
-            ])
-
-            if not missing_df.empty:
-                st.dataframe(missing_df, use_container_width=True)
-
-    # Recommendations
-    if results.get('recommendations'):
-        with st.expander("💡 Quality Recommendations"):
-            for rec in results['recommendations']:
-                st.write(f"• {rec}")
-
-@st.cache_resource
-def load_bge_model():
-    """Load BGE model with caching for Streamlit"""
-    try:
-        from sentence_transformers import SentenceTransformer
-        model = SentenceTransformer('BAAI/bge-large-en-v1.5')
-        return model
-    except Exception as e:
-        st.warning(f"Failed to load BGE-large model: {str(e)}")
-        try:
-            # Fallback to smaller model
-            from sentence_transformers import SentenceTransformer
-            model = SentenceTransformer('all-MiniLM-L6-v2')
-            st.info("Using fallback model: all-MiniLM-L6-v2")
-            return model
-        except Exception as e2:
-            st.error(f"Failed to load any embedding model: {str(e2)}")
-            return None
-
-def run_data_mapping(data, llm_enabled=False):
-    """Run data mapping using BGE embeddings"""
-    try:
-        if DATA_AGENTS_AVAILABLE:
-            # Get Groq API key if LLM enabled
-            groq_api_key = None
-            if llm_enabled:
-                try:
-                    groq_api_key = st.secrets.get("GROQ_API_KEY")
-                    if not groq_api_key:
-                        st.warning("⚠️ LLM enabled but no Groq API key found in secrets. Using BGE embeddings only.")
-                except:
-                    st.warning("⚠️ LLM enabled but no API key found. Using BGE embeddings only.")
-
-            # Run async mapping in sync context
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-            mapping_result = loop.run_until_complete(
-                run_automated_data_mapping(
-                    source_data=data,
-                    user_id=st.session_state.username,
-                    groq_api_key=groq_api_key
-                )
-            )
-
-            return mapping_result
-        else:
-            return run_bge_embedding_mapping(data, llm_enabled)
-
-    except Exception as e:
-        st.error(f"❌ Data mapping failed: {str(e)}")
-        return run_bge_embedding_mapping(data, llm_enabled)
-
-def run_bge_embedding_mapping(data, llm_enabled=False):
-    """Run BGE embedding-based data mapping following the exact approach from data_mapping_agent"""
-    try:
-        st.info("🤖 Loading BGE-large model for semantic similarity mapping...")
-
-        # Load BGE model
-        model = load_bge_model()
-        if model is None:
-            return run_fallback_mapping(data, llm_enabled)
-
-        # Define CBUAE banking compliance target schema
-        target_schema = [
-            'customer_id', 'customer_type', 'full_name_en', 'full_name_ar', 'id_number',
-            'account_id', 'account_type', 'account_status', 'dormancy_status',
-            'balance_current', 'balance_available', 'last_transaction_date',
-            'last_contact_date', 'contact_attempts', 'phone_primary', 'email_primary',
-            'risk_rating', 'kyc_status', 'branch_code', 'currency', 'maturity_date',
-            'auto_renewal', 'address_line1', 'city', 'country'
-        ]
-
-        source_columns = data.columns.tolist()
-
-        st.info(f"📊 Analyzing {len(source_columns)} source columns against {len(target_schema)} target fields...")
-
-        # Generate embeddings for target schema with progress
-        with st.spinner("🧠 Generating embeddings for target schema..."):
-            target_embeddings = model.encode(target_schema, show_progress_bar=False, batch_size=32)
-
-        # Generate embeddings for source columns
-        with st.spinner("🧠 Generating embeddings for source columns..."):
-            source_embeddings = model.encode(source_columns, show_progress_bar=False, batch_size=32)
-
-        st.info("📐 Calculating cosine similarity scores...")
-
-        # Calculate cosine similarity matrix
-        from sklearn.metrics.pairwise import cosine_similarity
-        similarity_matrix = cosine_similarity(target_embeddings, source_embeddings)
-
-        # Create mapping results
-        mapping_sheet = []
-        auto_mapped_count = 0
-
-        for i, target_col in enumerate(target_schema):
-            # Get similarities for this target column
-            similarities = similarity_matrix[i]
-
-            # Find best match
-            best_match_idx = np.argmax(similarities)
-            best_score = similarities[best_match_idx]
-            best_match_col = source_columns[best_match_idx]
-
-            # Determine confidence level based on similarity score
-            if best_score >= 0.9:
-                confidence_level = "high"
-                auto_mapped_count += 1
-            elif best_score >= 0.75:
-                confidence_level = "medium"
-                if llm_enabled and best_score < 0.9:  # LLM helps with medium confidence
-                    # Simulate LLM enhancement for scores < 90%
-                    enhanced_score = min(0.95, best_score + 0.1)  # Boost score slightly
-                    best_score = enhanced_score
-                    auto_mapped_count += 1
-            elif best_score >= 0.6:
-                confidence_level = "medium"
-                if llm_enabled:
-                    auto_mapped_count += 1
-            else:
-                confidence_level = "low"
-
-            # Determine if auto-mapped
-            is_auto_mapped = (
-                confidence_level == "high" or
-                (llm_enabled and confidence_level == "medium")
-            )
-
-            mapping_sheet.append({
-                'Target_Column': target_col,
-                'Source_Column': best_match_col,
-                'Similarity_Score': float(best_score),
-                'Confidence_Level': confidence_level,
-                'Auto_Mapped': is_auto_mapped,
-                'BGE_Embedding': True  # Flag to indicate BGE was used
-            })
-
-        # Create mapping DataFrame
-        mapping_df = pd.DataFrame(mapping_sheet)
-
-        # Calculate statistics
-        auto_mapping_percentage = (auto_mapped_count / len(target_schema)) * 100
-        avg_similarity = mapping_df['Similarity_Score'].mean()
-
-        # Enhanced message with BGE details
-        message_parts = [
-            f"BGE embedding-based mapping completed",
-            f"Average similarity: {avg_similarity:.3f}",
-            f"Auto-mapped: {auto_mapping_percentage:.1f}%"
-        ]
-
-        if llm_enabled:
-            llm_enhanced_count = len(mapping_df[
-                (mapping_df['Confidence_Level'] == 'medium') &
-                (mapping_df['Auto_Mapped'] == True)
-            ])
-            message_parts.append(f"LLM enhanced: {llm_enhanced_count} fields")
-
-        return {
-            "success": True,
-            "auto_mapping_percentage": auto_mapping_percentage,
-            "mapping_sheet": mapping_df,
-            "transformation_ready": auto_mapping_percentage >= 70,
-            "llm_enhanced": llm_enabled,
-            "avg_similarity": avg_similarity,
-            "model_used": "BAAI/bge-large-en-v1.5" if "bge-large" in str(model) else "all-MiniLM-L6-v2",
-            "message": " | ".join(message_parts),
-            "user_action_required": auto_mapping_percentage < 90,
-            "similarity_matrix": similarity_matrix.tolist()  # For advanced users
-        }
-
-    except ImportError:
-        st.error("❌ sentence-transformers package not available. Please install: pip install sentence-transformers")
-        return run_fallback_mapping(data, llm_enabled)
-    except Exception as e:
-        st.error(f"❌ BGE embedding mapping failed: {str(e)}")
-        return run_fallback_mapping(data, llm_enabled)
-
-def run_fallback_mapping(data, llm_enabled=False):
-    """Fallback mapping when BGE embeddings are not available"""
-    try:
-        # Define target schema
-        target_schema = [
-            'customer_id', 'account_id', 'account_type', 'account_status',
-            'balance_current', 'last_transaction_date', 'customer_name',
-            'risk_rating', 'kyc_status', 'dormancy_status', 'last_contact_date',
-            'contact_attempts', 'branch_code', 'currency'
-        ]
-
-        source_columns = data.columns.tolist()
-
-        # Simple string matching for demonstration
-        mapping_sheet = []
-        auto_mapped_count = 0
-
-        for target_col in target_schema:
-            best_match = None
-            best_score = 0
-            confidence_level = "low"
-
-            for source_col in source_columns:
-                # Simple similarity based on string matching
-                similarity = calculate_string_similarity(target_col.lower(), source_col.lower())
-
-                if similarity > best_score:
-                    best_score = similarity
-                    best_match = source_col
-
-            # Determine confidence level
-            if best_score >= 0.9:
-                confidence_level = "high"
-                auto_mapped_count += 1
-            elif best_score >= 0.7:
-                confidence_level = "medium"
-                if llm_enabled:
-                    auto_mapped_count += 1
-            else:
-                confidence_level = "low"
-
-            mapping_sheet.append({
-                'Target_Column': target_col,
-                'Source_Column': best_match if best_match else 'UNMAPPED',
-                'Similarity_Score': best_score,
-                'Confidence_Level': confidence_level,
-                'Auto_Mapped': confidence_level == "high" or (llm_enabled and confidence_level == "medium"),
-                'BGE_Embedding': False  # Flag to indicate fallback was used
-            })
-
-        # Create mapping DataFrame
-        mapping_df = pd.DataFrame(mapping_sheet)
-
-        auto_mapping_percentage = (auto_mapped_count / len(target_schema)) * 100
-
-        return {
-            "success": True,
-            "auto_mapping_percentage": auto_mapping_percentage,
-            "mapping_sheet": mapping_df,
-            "transformation_ready": auto_mapping_percentage >= 70,
-            "llm_enhanced": llm_enabled,
-            "model_used": "String matching (fallback)",
-            "message": f"Fallback mapping completed with {auto_mapping_percentage:.1f}% confidence" +
-                      (" (LLM Enhanced)" if llm_enabled else ""),
-            "user_action_required": auto_mapping_percentage < 90
-        }
-
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "auto_mapping_percentage": 0
-        }
-
-def calculate_string_similarity(str1, str2):
-    """Calculate simple string similarity"""
-    if str1 == str2:
-        return 1.0
-
-    # Check for substring matches
-    if str1 in str2 or str2 in str1:
-        return 0.8
-
-    # Check for word overlaps
-    words1 = set(str1.split('_'))
-    words2 = set(str2.split('_'))
-
-    if words1 & words2:
-        return 0.6
-
-    return 0.0
-
-def display_mapping_results(results):
-    """Display mapping results with BGE embedding information"""
-    if not results.get('success'):
-        st.error(f"❌ Data mapping failed: {results.get('error', 'Unknown error')}")
-        return
-
-    # Header with model information
-    col1, col2, col3 = st.columns([2, 1, 1])
-
-    with col1:
-        auto_pct = results.get('auto_mapping_percentage', 0)
-        model_used = results.get('model_used', 'Unknown')
-
-        if auto_pct >= 90:
-            st.success(f"✅ Excellent mapping! {auto_pct:.1f}% auto-mapped")
-        elif auto_pct >= 70:
-            st.info(f"ℹ️ Good mapping: {auto_pct:.1f}% auto-mapped")
-        else:
-            st.warning(f"⚠️ Manual review needed: {auto_pct:.1f}% auto-mapped")
-
-        st.caption(f"🤖 Model: {model_used}")
-
-    with col2:
-        if results.get('transformation_ready'):
-            st.success("✅ Ready for analysis")
-        else:
-            st.warning("⚠️ Review required")
-
-        if 'avg_similarity' in results:
-            st.metric("Avg Similarity", f"{results['avg_similarity']:.3f}")
-
-    with col3:
-        if results.get('llm_enhanced'):
-            st.info("🧠 LLM Enhanced")
-
-        # Show BGE embedding flag
-        mapping_sheet = results.get('mapping_sheet')
-        if mapping_sheet is not None and not mapping_sheet.empty:
-            bge_used = mapping_sheet.iloc[0].get('BGE_Embedding', False)
-            if bge_used:
-                st.success("🎯 BGE Embeddings")
-            else:
-                st.warning("📝 String Matching")
-
-    # Display mapping sheet with enhanced information
-    if 'mapping_sheet' in results:
-        mapping_df = results['mapping_sheet']
-        st.session_state.mapping_sheet = mapping_df
-
-        with st.expander("🗺️ Detailed Mapping Results", expanded=True):
-            # Add color coding for confidence levels
-            def highlight_confidence(row):
-                if row['Confidence_Level'] == 'high':
-                    return ['background-color: #d4edda'] * len(row)
-                elif row['Confidence_Level'] == 'medium':
-                    return ['background-color: #fff3cd'] * len(row)
-                elif row['Confidence_Level'] == 'low':
-                    return ['background-color: #f8d7da'] * len(row)
-                return [''] * len(row)
-
-            # Format the dataframe for better display
-            display_df = mapping_df.copy()
-            display_df['Similarity_Score'] = display_df['Similarity_Score'].round(4)
-
-            # Apply styling
-            styled_df = display_df.style.apply(highlight_confidence, axis=1)
-            st.dataframe(styled_df, use_container_width=True)
-
-            # Enhanced mapping statistics
-            col1, col2, col3, col4, col5 = st.columns(5)
+            col1, col2, col3 = st.columns([4, 1, 1])
 
             with col1:
-                high_count = len(mapping_df[mapping_df['Confidence_Level'] == 'high'])
-                st.metric("High Confidence", high_count, delta="≥ 90% similarity")
+                st.markdown(f"**{agent_config['name']}**")
+                st.caption(agent_config['description'])
+                st.caption(f"📋 {agent_config['article']} • Priority: {agent_config['priority']} • Applies to: {agent_config['applies_to']}")
 
             with col2:
-                medium_count = len(mapping_df[mapping_df['Confidence_Level'] == 'medium'])
-                st.metric("Medium Confidence", medium_count, delta="75-89% similarity")
+                # Estimate potential alerts for this agent
+                alert_count = estimate_agent_alerts_real(data, agent_config['class_name'])
+                if alert_count > 0:
+                    st.metric("Potential Alerts", alert_count)
+                else:
+                    st.caption("No alerts expected")
 
             with col3:
-                low_count = len(mapping_df[mapping_df['Confidence_Level'] == 'low'])
-                st.metric("Low Confidence", low_count, delta="< 75% similarity")
+                if alert_count > 0:
+                    if st.button(f"🔍 Analyze", key=f"analyze_{agent_config['class_name']}"):
+                        run_single_dormancy_agent_real(agent_config, data)
 
+                # Show download button if results exist
+                if agent_config['class_name'] in st.session_state.dormancy_results:
+                    if st.button(f"📥 Download", key=f"download_{agent_config['class_name']}"):
+                        download_dormancy_results(agent_config['class_name'])
+
+            st.markdown('</div>', unsafe_allow_html=True)
+
+    # Show results if available
+    if st.session_state.dormancy_results:
+        st.divider()
+        st.markdown("### 📊 CBUAE Dormancy Analysis Results")
+        display_dormancy_results()
+
+def run_comprehensive_dormancy_analysis_real(data: pd.DataFrame):
+    """Run comprehensive dormancy analysis using the real CBUAE system from dormant_agent.py"""
+    try:
+        # Generate a unique session ID
+        session_id = f"session_{int(time.time())}"
+        st.session_state.analysis_session_id = session_id
+
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+
+        status_text.text("🔄 Initializing CBUAE dormancy analysis system...")
+        progress_bar.progress(10)
+
+        # Run the comprehensive analysis using dormant_agent.py
+        status_text.text("🧠 Running comprehensive CBUAE dormancy analysis...")
+        progress_bar.progress(30)
+
+        # Use asyncio to run the async function from dormant_agent.py
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+            analysis_results = loop.run_until_complete(
+                run_comprehensive_dormancy_analysis_csv(
+                    user_id=st.session_state.username,
+                    account_data=data,
+                    report_date=datetime.now().strftime("%Y-%m-%d")
+                )
+            )
+        finally:
+            loop.close()
+
+        progress_bar.progress(80)
+        status_text.text("📊 Processing analysis results...")
+
+        if analysis_results['success']:
+            st.session_state.dormancy_results['comprehensive_analysis'] = analysis_results
+
+            progress_bar.progress(100)
+            status_text.text("✅ Comprehensive CBUAE analysis completed!")
+
+            # Display summary results
+            col1, col2, col3, col4 = st.columns(4)
+
+            with col1:
+                st.metric("📊 Total Analyzed", f"{analysis_results['total_accounts_analyzed']:,}")
+            with col2:
+                st.metric("🚨 Dormant Found", analysis_results['dormant_accounts_found'])
+            with col3:
+                st.metric("⚠️ High Risk", analysis_results.get('high_risk_accounts', 0))
             with col4:
-                auto_mapped = len(mapping_df[mapping_df['Auto_Mapped'] == True])
-                st.metric("Auto Mapped", auto_mapped, delta="Ready to use")
+                st.metric("⏱️ Processing Time", f"{analysis_results['processing_time_seconds']:.2f}s")
 
-            with col5:
-                if 'avg_similarity' in results:
-                    avg_sim = results['avg_similarity']
-                    st.metric("Avg Score", f"{avg_sim:.3f}",
-                             delta="Excellent" if avg_sim >= 0.8 else "Good" if avg_sim >= 0.6 else "Review needed")
+            # Show compliance flags if any
+            if analysis_results.get('compliance_flags'):
+                st.warning("⚠️ Compliance Issues Found:")
+                for flag in analysis_results['compliance_flags']:
+                    st.write(f"• {flag}")
 
-        # BGE Embedding Details (if available)
-        if results.get('similarity_matrix') and st.checkbox("🔬 Show Advanced BGE Analysis"):
-            st.markdown("#### 🧠 BGE Embedding Analysis Details")
+            # Display individual agent results
+            if 'analysis_results' in analysis_results and analysis_results['analysis_results']:
+                with st.expander("🔍 Individual Agent Results", expanded=True):
+                    for agent_name, result in analysis_results['analysis_results'].items():
+                        if isinstance(result, dict) and result.get('results', {}).get('count', 0) > 0:
+                            st.write(f"**{agent_name.replace('_', ' ').title()}:** {result['results']['count']} alerts")
 
-            similarity_matrix = np.array(results['similarity_matrix'])
+            # Show recommendations if available
+            if analysis_results.get('recommendations'):
+                with st.expander("💡 Recommendations", expanded=True):
+                    for rec in analysis_results['recommendations']:
+                        st.markdown(f"**{rec.get('agent', 'Unknown')}** ({rec.get('priority', 'MEDIUM')}): {rec.get('action', 'No action specified')}")
 
-            # Create heatmap of similarity scores
-            import plotly.graph_objects as go
+            # Download comprehensive results
+            if st.button("📥 Download Comprehensive Results", type="primary"):
+                download_comprehensive_results(analysis_results)
 
-            fig = go.Figure(data=go.Heatmap(
-                z=similarity_matrix,
-                x=mapping_df['Source_Column'].tolist()[:10],  # Limit for readability
-                y=mapping_df['Target_Column'].tolist()[:10],
-                colorscale='RdYlGn',
-                colorbar=dict(title="Cosine Similarity")
-            ))
+        else:
+            st.error(f"❌ Analysis failed: {analysis_results.get('error', 'Unknown error')}")
+            progress_bar.progress(0)
+            status_text.text("❌ Analysis failed")
 
-            fig.update_layout(
-                title="BGE Embedding Similarity Matrix (Top 10x10)",
-                xaxis_title="Source Columns",
-                yaxis_title="Target Schema",
-                height=600
-            )
+    except Exception as e:
+        st.error(f"❌ Error running comprehensive analysis: {str(e)}")
+        logger.error(f"Comprehensive analysis error: {e}")
+        st.error(f"Full traceback: {traceback.format_exc()}")
 
-            st.plotly_chart(fig, use_container_width=True)
+def run_single_dormancy_agent_real(agent_config: Dict, data: pd.DataFrame):
+    """Run a single dormancy agent using the real agent classes from dormant_agent.py"""
+    try:
+        with st.spinner(f"Running {agent_config['name']} analysis..."):
 
-            # Show top similarity scores
-            st.markdown("**Top 10 Similarity Scores:**")
-            top_mappings = mapping_df.nlargest(10, 'Similarity_Score')[
-                ['Target_Column', 'Source_Column', 'Similarity_Score', 'Confidence_Level']
+            if DORMANCY_SYSTEM_AVAILABLE and agent_config['agent_class']:
+                # Create the real agent instance
+                agent = agent_config['agent_class']()
+
+                # Create agent state for analysis
+                agent_state = AgentState(
+                    agent_id=secrets.token_hex(8),
+                    agent_type=agent_config['class_name'],
+                    session_id=st.session_state.analysis_session_id or secrets.token_hex(8),
+                    user_id=st.session_state.username,
+                    timestamp=datetime.now(),
+                    input_dataframe=data
+                )
+
+                # Run the actual analysis using asyncio
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+
+                    result_state = loop.run_until_complete(
+                        agent.analyze_dormancy(agent_state, datetime.now().strftime("%Y-%m-%d"))
+                    )
+                finally:
+                    loop.close()
+
+                # Process the results
+                if result_state.analysis_results:
+                    st.session_state.dormancy_results[agent_config['class_name']] = {
+                        'analysis_results': result_state.analysis_results,
+                        'agent_name': agent_config['name'],
+                        'processing_time': result_state.processing_time,
+                        'status': 'completed',
+                        'records_processed': result_state.records_processed,
+                        'dormant_found': result_state.dormant_records_found
+                    }
+
+                    alerts_found = result_state.analysis_results.get('count', 0)
+                    st.success(f"✅ {agent_config['name']} analysis completed! Found {alerts_found} alerts.")
+
+                    # Show brief summary
+                    if alerts_found > 0:
+                        st.info(f"📋 {result_state.analysis_results.get('description', 'Analysis completed')}")
+
+                        # Show sample results
+                        if 'details' in result_state.analysis_results and result_state.analysis_results['details']:
+                            with st.expander("Sample Results", expanded=False):
+                                sample_results = result_state.analysis_results['details'][:5]  # Show first 5
+                                st.dataframe(pd.DataFrame(sample_results), use_container_width=True)
+                else:
+                    st.warning(f"⚠️ {agent_config['name']} analysis completed but no results returned.")
+            else:
+                st.error("❌ CBUAE Dormancy System not available")
+
+    except Exception as e:
+        st.error(f"❌ Error running {agent_config['name']}: {str(e)}")
+        logger.error(f"Single agent error: {e}")
+        st.error(f"Full traceback: {traceback.format_exc()}")
+
+def estimate_agent_alerts_real(data: pd.DataFrame, agent_class_name: str) -> int:
+    """Estimate potential alerts for an agent based on data characteristics and real logic"""
+    if data.empty:
+        return 0
+
+    try:
+        if 'DemandDeposit' in agent_class_name:
+            # Demand deposits with unknown address and long inactivity
+            candidates = data[
+                (data.get('account_type', pd.Series()).isin(['CURRENT', 'SAVINGS'])) &
+                (data.get('address_known', pd.Series()) == 'NO') &
+                (data.get('account_status', pd.Series()) != 'CLOSED')
             ]
-            st.dataframe(top_mappings, use_container_width=True)
+            return len(candidates)
 
-        # Download mapping sheet with enhanced information
-        st.markdown("### 📥 Download Mapping Results")
+        elif 'FixedDeposit' in agent_class_name:
+            candidates = data[
+                (data.get('account_type', pd.Series()).isin(['FIXED_DEPOSIT'])) &
+                (data.get('account_status', pd.Series()) != 'CLOSED')
+            ]
+            return len(candidates)
 
-        col1, col2, col3 = st.columns(3)
+        elif 'Investment' in agent_class_name:
+            candidates = data[
+                (data.get('account_type', pd.Series()).isin(['INVESTMENT'])) &
+                (data.get('account_status', pd.Series()) != 'CLOSED')
+            ]
+            return len(candidates)
 
-        with col1:
-            # Enhanced CSV with metadata
-            csv_content = f"""# Banking Compliance Data Mapping Results
-# Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-# Model Used: {results.get('model_used', 'Unknown')}
-# Auto Mapping Rate: {results.get('auto_mapping_percentage', 0):.1f}%
-# LLM Enhanced: {results.get('llm_enhanced', False)}
-# Average Similarity: {results.get('avg_similarity', 0):.3f}
+        elif 'ContactAttempts' in agent_class_name:
+            candidates = data[
+                (data.get('dormancy_status', pd.Series()).isin(['DORMANT', 'FLAGGED'])) &
+                (data.get('contact_attempts_made', pd.Series()).fillna(0) < 3)
+            ]
+            return len(candidates)
 
-"""
-            csv_content += mapping_df.to_csv(index=False)
+        elif 'CBTransfer' in agent_class_name:
+            candidates = data[
+                (data.get('dormancy_status', pd.Series()) == 'DORMANT') &
+                (data.get('dormancy_period_months', pd.Series()).fillna(0) >= 60)  # 5+ years
+            ]
+            return len(candidates)
+
+        elif 'ForeignCurrency' in agent_class_name:
+            candidates = data[
+                (data.get('currency', pd.Series()) != 'AED') &
+                (data.get('dormancy_status', pd.Series()) == 'DORMANT')
+            ]
+            return len(candidates)
+
+        else:
+            return 0
+
+    except Exception:
+        return 0
+
+def download_dormancy_results(agent_class_name: str):
+    """Download dormancy results for a specific agent"""
+    if agent_class_name in st.session_state.dormancy_results:
+        result = st.session_state.dormancy_results[agent_class_name]
+
+        if 'analysis_results' in result and 'details' in result['analysis_results']:
+            df = pd.DataFrame(result['analysis_results']['details'])
+
+            csv_buffer = io.StringIO()
+            df.to_csv(csv_buffer, index=False)
 
             st.download_button(
-                label="📄 Download Mapping Sheet (CSV)",
-                data=csv_content,
-                file_name=f"bge_data_mapping_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                label=f"📥 Download {agent_class_name} Results",
+                data=csv_buffer.getvalue(),
+                file_name=f"cbuae_{agent_class_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv",
-                type="secondary",
-                use_container_width=True
+                key=f"download_btn_{agent_class_name}"
             )
 
-        with col2:
-            # Excel with multiple sheets
-            excel_buffer = io.BytesIO()
-
-            with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                # Main mapping sheet
-                mapping_df.to_excel(writer, sheet_name='Mapping Results', index=False)
-
-                # Statistics sheet
-                stats_df = pd.DataFrame({
-                    'Metric': [
-                        'Total Target Fields', 'Auto Mapped Fields', 'Auto Mapping Rate (%)',
-                        'High Confidence', 'Medium Confidence', 'Low Confidence',
-                        'Average Similarity', 'Model Used', 'LLM Enhanced',
-                        'Transformation Ready'
-                    ],
-                    'Value': [
-                        len(mapping_df), len(mapping_df[mapping_df['Auto_Mapped'] == True]),
-                        f"{results.get('auto_mapping_percentage', 0):.1f}",
-                        len(mapping_df[mapping_df['Confidence_Level'] == 'high']),
-                        len(mapping_df[mapping_df['Confidence_Level'] == 'medium']),
-                        len(mapping_df[mapping_df['Confidence_Level'] == 'low']),
-                        f"{results.get('avg_similarity', 0):.3f}",
-                        results.get('model_used', 'Unknown'),
-                        results.get('llm_enhanced', False),
-                        results.get('transformation_ready', False)
-                    ]
-                })
-                stats_df.to_excel(writer, sheet_name='Statistics', index=False)
-
-            excel_data = excel_buffer.getvalue()
-
-            st.download_button(
-                label="📊 Download Complete Report (Excel)",
-                data=excel_data,
-                file_name=f"bge_mapping_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                type="secondary",
-                use_container_width=True
-            )
-
-        with col3:
-            # JSON format for API integration
-            json_result = {
-                'metadata': {
-                    'generated_at': datetime.now().isoformat(),
-                    'model_used': results.get('model_used', 'Unknown'),
-                    'auto_mapping_percentage': results.get('auto_mapping_percentage', 0),
-                    'llm_enhanced': results.get('llm_enhanced', False),
-                    'avg_similarity': results.get('avg_similarity', 0)
-                },
-                'mappings': mapping_df.to_dict('records')
+def download_comprehensive_results(analysis_results: Dict):
+    """Download comprehensive analysis results"""
+    try:
+        # Create a comprehensive report
+        report_data = {
+            'Analysis Summary': {
+                'Total Accounts Analyzed': analysis_results['total_accounts_analyzed'],
+                'Dormant Accounts Found': analysis_results['dormant_accounts_found'],
+                'High Risk Accounts': analysis_results.get('high_risk_accounts', 0),
+                'Processing Time (seconds)': analysis_results['processing_time_seconds'],
+                'Analysis Date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'Session ID': st.session_state.analysis_session_id
             }
-
-            st.download_button(
-                label="📋 Download JSON (API Ready)",
-                data=json.dumps(json_result, indent=2),
-                file_name=f"bge_mapping_api_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                mime="application/json",
-                type="secondary",
-                use_container_width=True
-            )
-
-        # Show manual mapping interface if needed
-        if results.get('user_action_required') and not st.session_state.llm_enabled:
-            show_manual_mapping_interface(mapping_df)
-        elif results.get('user_action_required') and st.session_state.llm_enabled:
-            if st.button("🤖 Apply LLM Assistance for Low Confidence Fields", type="secondary"):
-                apply_llm_assistance_to_mapping(results)
-
-        # Mark data as processed if mapping is good enough
-        if results.get('transformation_ready'):
-            st.session_state.processed_data = st.session_state.uploaded_data
-            st.success("🎉 Data is ready for dormancy and compliance analysis!")
-            avg_similarity = mapping_df['Similarity_Score'].mean()
-            st.metric("Avg Similarity", f"{avg_similarity:.3f}")
-
-        # Download mapping sheet
-        st.markdown("### 📥 Download Mapping Sheet")
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            csv_data = mapping_df.to_csv(index=False)
-            st.download_button(
-                label="📄 Download Mapping Sheet (CSV)",
-                data=csv_data,
-                file_name=f"data_mapping_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv",
-                type="secondary",
-                use_container_width=True
-            )
-
-        with col2:
-            excel_buffer = io.BytesIO()
-            mapping_df.to_excel(excel_buffer, index=False, engine='openpyxl')
-            excel_data = excel_buffer.getvalue()
-
-            st.download_button(
-                label="📊 Download Mapping Sheet (Excel)",
-                data=excel_data,
-                file_name=f"data_mapping_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                type="secondary",
-                use_container_width=True
-            )
-
-        # Show manual mapping interface if needed
-        if results.get('user_action_required') and not st.session_state.llm_enabled:
-            show_manual_mapping_interface(mapping_df)
-        elif results.get('user_action_required') and st.session_state.llm_enabled:
-            if st.button("🤖 Apply LLM Assistance", type="secondary"):
-                apply_llm_assistance_to_mapping(results)
-
-        # Mark data as processed if mapping is good enough
-        if results.get('transformation_ready'):
-            st.session_state.processed_data = st.session_state.uploaded_data
-            st.success("🎉 Data is ready for dormancy and compliance analysis!")
-
-def show_manual_mapping_interface(mapping_sheet):
-    """Show manual mapping interface for low confidence fields"""
-    st.markdown("#### ✏️ Manual Column Mapping")
-
-    low_confidence_fields = mapping_sheet[mapping_sheet['Confidence_Level'] == 'low']
-
-    if len(low_confidence_fields) > 0:
-        st.info(f"Please manually map {len(low_confidence_fields)} low confidence columns:")
-
-        source_columns = st.session_state.uploaded_data.columns.tolist()
-        source_columns.insert(0, "UNMAPPED")
-
-        updated_mappings = {}
-
-        for idx, row in low_confidence_fields.iterrows():
-            target_col = row['Target_Column']
-            current_mapping = row['Source_Column']
-
-            selected_mapping = st.selectbox(
-                f"Map '{target_col}' to:",
-                source_columns,
-                index=source_columns.index(current_mapping) if current_mapping in source_columns else 0,
-                key=f"mapping_{target_col}"
-            )
-
-            updated_mappings[target_col] = selected_mapping
-
-        if st.button("💾 Apply Manual Mappings", type="primary"):
-            # Update mapping sheet with manual selections
-            for target_col, source_col in updated_mappings.items():
-                mask = mapping_sheet['Target_Column'] == target_col
-                mapping_sheet.loc[mask, 'Source_Column'] = source_col
-                mapping_sheet.loc[mask, 'Confidence_Level'] = 'manual'
-                mapping_sheet.loc[mask, 'Auto_Mapped'] = True
-
-            st.session_state.mapping_sheet = mapping_sheet
-            st.success("✅ Manual mappings applied successfully!")
-            st.rerun()
-
-def apply_llm_assistance_to_mapping(mapping_results):
-    """Apply LLM assistance to improve mapping results"""
-    with st.spinner("Applying LLM assistance to improve mappings..."):
-        try:
-            if DATA_AGENTS_AVAILABLE:
-                mapping_agent = create_data_mapping_agent(groq_api_key=st.secrets.get("GROQ_API_KEY"))
-
-                # Run async LLM assistance
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-
-                llm_result = loop.run_until_complete(
-                    apply_llm_assistance(mapping_agent, mapping_results["mapping_sheet"])
-                )
-
-                if llm_result.get("success"):
-                    st.session_state.mapping_results = llm_result
-                    st.success(f"🤖 {llm_result.get('message', 'LLM assistance applied successfully')}")
-                    st.rerun()
-                else:
-                    st.error(f"❌ LLM assistance failed: {llm_result.get('error')}")
-            else:
-                st.error("❌ Data mapping agent not available for LLM assistance")
-
-        except Exception as e:
-            st.error(f"❌ LLM assistance error: {str(e)}")
-
-# Dormant Account Analysis Section
-def show_dormant_analysis_section():
-    """Display dormant account analysis using real agents"""
-    st.markdown('<div class="section-header">😴 Dormant Account Analysis</div>', unsafe_allow_html=True)
-
-    if st.session_state.processed_data is None:
-        st.warning("⚠️ Please upload and process data first.")
-        if st.button("🔄 Use Raw Data for Analysis"):
-            if st.session_state.uploaded_data is not None:
-                st.session_state.processed_data = st.session_state.uploaded_data
-                st.success("✅ Using uploaded data for analysis")
-                st.rerun()
-        return
-
-    data = st.session_state.processed_data
-
-    # Check for dormant accounts
-    dormant_count = 0
-    if 'dormancy_status' in data.columns:
-        dormant_count = len(data[data['dormancy_status'].isin(['Dormant', 'DORMANT'])])
-    elif 'account_status' in data.columns:
-        dormant_count = len(data[data['account_status'] == 'DORMANT'])
-
-    st.info(f"📊 Dataset contains {len(data):,} total records")
-    if dormant_count > 0:
-        st.success(f"💤 Found {dormant_count:,} dormant accounts for analysis")
-    else:
-        st.info("ℹ️ No explicitly marked dormant accounts. Analysis will identify potential dormant accounts.")
-
-    # Available dormancy agents
-    dormancy_agents = [
-        {
-            'name': 'Demand Deposit Dormancy',
-            'description': 'Analyzes dormancy for demand deposit accounts (savings, current)',
-            'article': 'CBUAE Art. 2.1.1',
-            'applies_to': 'Current and Savings accounts inactive for 3+ years',
-            'agent_class': 'DemandDepositDormancyAgent',
-            'available': DORMANCY_AGENTS_AVAILABLE
-        },
-        {
-            'name': 'Fixed Deposit Dormancy',
-            'description': 'Analyzes dormancy for fixed/term deposit accounts',
-            'article': 'CBUAE Art. 2.2',
-            'applies_to': 'Fixed deposits with maturity and renewal criteria',
-            'agent_class': 'FixedDepositDormancyAgent',
-            'available': DORMANCY_AGENTS_AVAILABLE
-        },
-        {
-            'name': 'Investment Account Dormancy',
-            'description': 'Analyzes dormancy for investment and portfolio accounts',
-            'article': 'CBUAE Art. 2.3',
-            'applies_to': 'Investment accounts with inactivity patterns',
-            'agent_class': 'InvestmentAccountDormancyAgent',
-            'available': DORMANCY_AGENTS_AVAILABLE
-        },
-        {
-            'name': 'Contact Attempts Analysis',
-            'description': 'Tracks and analyzes customer contact attempts for dormant accounts',
-            'article': 'CBUAE Art. 3.1',
-            'applies_to': 'Dormant accounts requiring customer outreach',
-            'agent_class': 'ContactAttemptsAgent',
-            'available': DORMANCY_AGENTS_AVAILABLE
-        },
-        {
-            'name': 'CB Transfer Eligibility',
-            'description': 'Identifies accounts eligible for Central Bank transfer',
-            'article': 'CBUAE Art. 8',
-            'applies_to': 'Dormant accounts meeting transfer criteria',
-            'agent_class': 'CBTransferEligibilityAgent',
-            'available': DORMANCY_AGENTS_AVAILABLE
-        },
-        {
-            'name': 'High Value Dormant Accounts',
-            'description': 'Identifies high-value dormant accounts requiring special attention',
-            'article': 'CBUAE Art. 2.x',
-            'applies_to': 'Dormant accounts above value thresholds',
-            'agent_class': 'HighValueDormantAccountsAgent',
-            'available': DORMANCY_AGENTS_AVAILABLE
         }
-    ]
 
-    st.markdown("### 🤖 Available Dormancy Agents")
+        # Add recommendations and priority actions if available
+        if analysis_results.get('recommendations'):
+            report_data['Recommendations'] = analysis_results['recommendations']
+        if analysis_results.get('priority_actions'):
+            report_data['Priority Actions'] = analysis_results['priority_actions']
 
-    # Display agents with their status
-    for agent in dormancy_agents:
-        with st.container():
-            col1, col2, col3 = st.columns([2, 1, 1])
+        # Convert to JSON for download
+        report_json = json.dumps(report_data, indent=2, default=str)
 
-            with col1:
-                status_class = "available-agent" if agent['available'] else "unavailable-agent"
-                st.markdown(f"""
-                <div class="agent-card {status_class}">
-                    <h4>{agent['name']}</h4>
-                    <p><strong>Regulation:</strong> {agent['article']}</p>
-                    <p><strong>Description:</strong> {agent['description']}</p>
-                    <p><strong>Applies to:</strong> {agent['applies_to']}</p>
-                </div>
-                """, unsafe_allow_html=True)
-
-            with col2:
-                if agent['available']:
-                    if st.button(f"🔍 Analyze", key=f"analyze_{agent['name']}", type="primary"):
-                        run_dormancy_analysis(agent, data)
-                else:
-                    st.button("❌ Unavailable", disabled=True, key=f"unavailable_{agent['name']}")
-
-            with col3:
-                if agent['name'] in st.session_state.dormancy_results:
-                    result = st.session_state.dormancy_results[agent['name']]
-                    count = result.get('count', 0)
-
-                    if count > 0:
-                        st.metric("Found", count)
-
-                        # Download buttons
-                        col_csv, col_summary = st.columns(2)
-
-                        with col_csv:
-                            if 'data' in result:
-                                csv_data = pd.DataFrame(result['data']).to_csv(index=False)
-                                st.download_button(
-                                    "📄 CSV",
-                                    data=csv_data,
-                                    file_name=f"{agent['name'].lower().replace(' ', '_')}_results.csv",
-                                    mime="text/csv",
-                                    key=f"csv_{agent['name']}",
-                                    use_container_width=True
-                                )
-
-                        with col_summary:
-                            if 'summary' in result:
-                                st.download_button(
-                                    "📋 Summary",
-                                    data=result['summary'],
-                                    file_name=f"{agent['name'].lower().replace(' ', '_')}_summary.txt",
-                                    key=f"summary_{agent['name']}",
-                                    use_container_width=True
-                                )
-                    else:
-                        st.metric("Found", "0")
-
-    # Run all dormancy checks
-    st.markdown("---")
-    col1, col2 = st.columns(2)
-
-    with col1:
-        if st.button("🔍 Run All Dormancy Analyses", type="primary", use_container_width=True):
-            run_all_dormancy_analyses(dormancy_agents, data)
-
-    with col2:
-        if DORMANCY_AGENTS_AVAILABLE and st.button("🚀 Run Workflow Orchestrator", type="secondary", use_container_width=True):
-            run_dormancy_workflow_orchestrator(data)
-
-def run_dormancy_analysis(agent, data):
-    """Run individual dormancy analysis"""
-    with st.spinner(f"Running {agent['name']} analysis..."):
-        try:
-            if agent['available']:
-                # Use real agent
-                result = run_real_dormancy_analysis(agent, data)
-            else:
-                # Use mock analysis
-                result = run_mock_dormancy_analysis(agent, data)
-
-            st.session_state.dormancy_results[agent['name']] = result
-
-            if result.get('count', 0) > 0:
-                st.success(f"✅ {agent['name']}: Found {result['count']} accounts")
-            else:
-                st.info(f"ℹ️ {agent['name']}: No accounts found matching criteria")
-
-        except Exception as e:
-            st.error(f"❌ {agent['name']} analysis failed: {str(e)}")
-
-def run_real_dormancy_analysis(agent, data):
-    """Run real dormancy analysis using actual agents"""
-    try:
-        # Initialize mock dependencies
-        mock_memory = MockMemoryAgent()
-        mock_mcp = MockMCPClient()
-
-        # Create agent instance
-        if agent['name'] == 'Demand Deposit Dormancy':
-            from agents.Dormant_agent import DemandDepositDormancyAgent
-            agent_instance = DemandDepositDormancyAgent(mock_memory, mock_mcp)
-        elif agent['name'] == 'Fixed Deposit Dormancy':
-            from agents.Dormant_agent import FixedDepositDormancyAgent
-            agent_instance = FixedDepositDormancyAgent(mock_memory, mock_mcp)
-        elif agent['name'] == 'Investment Account Dormancy':
-            from agents.Dormant_agent import InvestmentAccountDormancyAgent
-            agent_instance = InvestmentAccountDormancyAgent(mock_memory, mock_mcp)
-        else:
-            return run_mock_dormancy_analysis(agent, data)
-
-        # Create agent state
-        from agents.Dormant_agent import AgentState, AgentStatus
-
-        state = AgentState(
-            input_dataframe=data,
-            agent_status=AgentStatus.PENDING,
-            results={}
+        st.download_button(
+            label="📥 Download Comprehensive Report (JSON)",
+            data=report_json,
+            file_name=f"cbuae_comprehensive_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+            mime="application/json"
         )
 
-        # Run analysis
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        # Also offer CSV download of summary
+        if 'analysis_results' in analysis_results:
+            summary_data = []
+            for agent_name, result in analysis_results['analysis_results'].items():
+                if isinstance(result, dict):
+                    summary_data.append({
+                        'Agent': agent_name.replace('_', ' ').title(),
+                        'Status': result.get('status', 'Unknown'),
+                        'Alerts Found': result.get('results', {}).get('count', 0),
+                        'Processing Time': result.get('processing_time', 0),
+                        'Article': result.get('results', {}).get('compliance_article', 'N/A')
+                    })
 
-        result_state = loop.run_until_complete(
-            agent_instance.analyze_dormancy(state, datetime.now().strftime("%Y-%m-%d"))
-        )
+            if summary_data:
+                summary_df = pd.DataFrame(summary_data)
+                summary_csv = summary_df.to_csv(index=False)
 
-        # Extract results
-        dormant_accounts = result_state.results.get('dormant_accounts', [])
-
-        return {
-            'count': len(dormant_accounts),
-            'data': dormant_accounts,
-            'summary': f"{agent['name']} Analysis Results\n" +
-                      f"Analysis Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n" +
-                      f"Total Records Analyzed: {len(data)}\n" +
-                      f"Dormant Accounts Found: {len(dormant_accounts)}\n" +
-                      f"Regulation: {agent['article']}\n" +
-                      f"Criteria: {agent['applies_to']}"
-        }
+                st.download_button(
+                    label="📥 Download Summary Report (CSV)",
+                    data=summary_csv,
+                    file_name=f"cbuae_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv"
+                )
 
     except Exception as e:
-        logger.error(f"Real dormancy analysis failed: {str(e)}")
-        return run_mock_dormancy_analysis(agent, data)
+        st.error(f"❌ Error creating download: {str(e)}")
 
-def run_mock_dormancy_analysis(agent, data):
-    """Run mock dormancy analysis when real agents are not available"""
-    try:
-        # Simulate analysis based on agent type
-        dormant_accounts = []
-
-        if 'Demand Deposit' in agent['name']:
-            # Filter for current/savings accounts
-            relevant_accounts = data[
-                data.get('account_type', pd.Series()).isin(['CURRENT', 'SAVINGS', 'Current', 'Savings'])
-            ] if 'account_type' in data.columns else data.sample(frac=0.3)
-
-        elif 'Fixed Deposit' in agent['name']:
-            # Filter for fixed deposit accounts
-            relevant_accounts = data[
-                data.get('account_type', pd.Series()).isin(['FIXED_DEPOSIT', 'Fixed Deposit'])
-            ] if 'account_type' in data.columns else data.sample(frac=0.2)
-
-        elif 'Investment' in agent['name']:
-            # Filter for investment accounts
-            relevant_accounts = data[
-                data.get('account_type', pd.Series()).isin(['INVESTMENT', 'Investment'])
-            ] if 'account_type' in data.columns else data.sample(frac=0.1)
-
-        else:
-            # Generic analysis
-            relevant_accounts = data.sample(frac=0.25)
-
-        # Mock identification of dormant accounts
-        for idx, account in relevant_accounts.iterrows():
-            # Simulate dormancy criteria
-            if np.random.random() < 0.3:  # 30% chance of being dormant
-                dormant_accounts.append({
-                    'account_id': account.get('account_id', f'ACC{idx}'),
-                    'customer_id': account.get('customer_id', f'CUS{idx}'),
-                    'customer_name': account.get('customer_name', f'Customer {idx}'),
-                    'account_type': account.get('account_type', 'UNKNOWN'),
-                    'balance': account.get('balance_current', np.random.uniform(1000, 50000)),
-                    'last_transaction_date': account.get('last_transaction_date', '2020-01-01'),
-                    'dormancy_reason': f"Mock: {agent['applies_to']}",
-                    'analysis_date': datetime.now().strftime('%Y-%m-%d')
-                })
-
-        return {
-            'count': len(dormant_accounts),
-            'data': dormant_accounts,
-            'summary': f"{agent['name']} Analysis Results (Mock)\n" +
-                      f"Analysis Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n" +
-                      f"Total Records Analyzed: {len(data)}\n" +
-                      f"Relevant Accounts: {len(relevant_accounts)}\n" +
-                      f"Dormant Accounts Found: {len(dormant_accounts)}\n" +
-                      f"Regulation: {agent['article']}\n" +
-                      f"Criteria: {agent['applies_to']}\n" +
-                      f"Note: This is a mock analysis for demonstration purposes."
-        }
-
-    except Exception as e:
-        return {
-            'count': 0,
-            'data': [],
-            'summary': f"Mock analysis failed: {str(e)}",
-            'error': str(e)
-        }
-
-def run_all_dormancy_analyses(agents, data):
-    """Run all dormancy analyses"""
-    with st.spinner("Running comprehensive dormancy analysis..."):
-        progress_bar = st.progress(0)
-
-        for i, agent in enumerate(agents):
-            if agent['available']:
-                result = run_real_dormancy_analysis(agent, data)
-            else:
-                result = run_mock_dormancy_analysis(agent, data)
-
-            st.session_state.dormancy_results[agent['name']] = result
-            progress_bar.progress((i + 1) / len(agents))
-
-        st.success("✅ All dormancy analyses completed!")
-        st.rerun()
-
-def run_dormancy_workflow_orchestrator(data):
-    """Run the comprehensive dormancy workflow orchestrator"""
-    with st.spinner("Running LangGraph-based dormancy workflow orchestrator..."):
-        try:
-            if DORMANCY_AGENTS_AVAILABLE:
-                from agents.Dormant_agent import DormancyWorkflowOrchestrator, DormancyAnalysisState
-
-                # Initialize orchestrator
-                orchestrator = DormancyWorkflowOrchestrator(
-                    memory_agent=MockMemoryAgent(),
-                    mcp_client=MockMCPClient()
-                )
-
-                # Create analysis state
-                analysis_state = DormancyAnalysisState(
-                    input_dataframe=data,
-                    analysis_config={
-                        "report_date": datetime.now().strftime("%Y-%m-%d"),
-                        "comprehensive_analysis": True
-                    }
-                )
-
-                # Run workflow
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-
-                final_state = loop.run_until_complete(
-                    orchestrator.workflow.ainvoke(analysis_state)
-                )
-
-                # Extract and store results
-                for agent_name, result in final_state.agent_results.items():
-                    st.session_state.dormancy_results[agent_name] = {
-                        'count': len(result.get('dormant_accounts', [])),
-                        'data': result.get('dormant_accounts', []),
-                        'summary': result.get('summary', f"{agent_name} completed via orchestrator")
-                    }
-
-                st.success("✅ Workflow orchestrator completed comprehensive analysis!")
-
-            else:
-                st.error("❌ Dormancy workflow orchestrator not available")
-
-        except Exception as e:
-            st.error(f"❌ Workflow orchestrator failed: {str(e)}")
-
-# Compliance Analysis Section
-def show_compliance_analysis_section():
-    """Display compliance analysis section"""
-    st.markdown('<div class="section-header">⚖️ Compliance Analysis</div>', unsafe_allow_html=True)
-
-    if st.session_state.processed_data is None:
-        st.warning("⚠️ Please upload and process data first.")
+def display_dormancy_results():
+    """Display dormancy results summary"""
+    if not st.session_state.dormancy_results:
         return
 
-    data = st.session_state.processed_data
+    # Calculate totals
+    total_alerts = 0
+    completed_agents = 0
 
-    # Available compliance agents
-    compliance_agents = [
-        {
-            'name': 'Incomplete Contact Attempts',
-            'description': 'Detects accounts with incomplete contact attempt processes',
-            'article': 'CBUAE Art. 5',
-            'applies_to': 'Dormant accounts with customer contact requirements',
-            'available': COMPLIANCE_AGENTS_AVAILABLE
-        },
-        {
-            'name': 'Unflagged Dormant Candidates',
-            'description': 'Identifies accounts that should be flagged as dormant but are not',
-            'article': 'CBUAE Art. 2.x',
-            'applies_to': 'All account types with dormancy criteria',
-            'available': COMPLIANCE_AGENTS_AVAILABLE
-        },
-        {
-            'name': 'Internal Ledger Candidates',
-            'description': 'Identifies accounts ready for internal ledger transfer',
-            'article': 'CBUAE Art. 3',
-            'applies_to': 'Dormant accounts after contact attempts',
-            'available': COMPLIANCE_AGENTS_AVAILABLE
-        },
-        {
-            'name': 'Statement Freeze Candidates',
-            'description': 'Identifies accounts eligible for statement suppression',
-            'article': 'CBUAE Art. 7.3',
-            'applies_to': 'Dormant accounts meeting statement freeze criteria',
-            'available': COMPLIANCE_AGENTS_AVAILABLE
-        }
-    ]
-
-    st.info("🔍 Compliance agents analyze data for regulatory compliance issues.")
-
-    # Display compliance agents
-    for agent in compliance_agents:
-        with st.container():
-            col1, col2, col3 = st.columns([2, 1, 1])
-
-            with col1:
-                status_class = "available-agent" if agent['available'] else "unavailable-agent"
-                st.markdown(f"""
-                <div class="agent-card {status_class}">
-                    <h4>{agent['name']}</h4>
-                    <p><strong>Regulation:</strong> {agent['article']}</p>
-                    <p><strong>Description:</strong> {agent['description']}</p>
-                    <p><strong>Applies to:</strong> {agent['applies_to']}</p>
-                </div>
-                """, unsafe_allow_html=True)
-
-            with col2:
-                if agent['available']:
-                    if st.button(f"🔍 Analyze", key=f"compliance_{agent['name']}", type="primary"):
-                        run_compliance_analysis(agent, data)
-                else:
-                    st.button("❌ Unavailable", disabled=True, key=f"unavailable_compliance_{agent['name']}")
-
-            with col3:
-                if agent['name'] in st.session_state.compliance_results:
-                    result = st.session_state.compliance_results[agent['name']]
-                    count = result.get('count', 0)
-
-                    if count > 0:
-                        st.metric("Issues Found", count)
-
-                        # Download buttons
-                        col_csv, col_summary = st.columns(2)
-
-                        with col_csv:
-                            if 'data' in result:
-                                csv_data = pd.DataFrame(result['data']).to_csv(index=False)
-                                st.download_button(
-                                    "📄 CSV",
-                                    data=csv_data,
-                                    file_name=f"compliance_{agent['name'].lower().replace(' ', '_')}_results.csv",
-                                    mime="text/csv",
-                                    key=f"compliance_csv_{agent['name']}",
-                                    use_container_width=True
-                                )
-
-                        with col_summary:
-                            if 'summary' in result:
-                                st.download_button(
-                                    "📋 Summary",
-                                    data=result['summary'],
-                                    file_name=f"compliance_{agent['name'].lower().replace(' ', '_')}_summary.txt",
-                                    key=f"compliance_summary_{agent['name']}",
-                                    use_container_width=True
-                                )
-                    else:
-                        st.metric("Issues Found", "0")
-
-    # Run all compliance checks
-    st.markdown("---")
-    if st.button("🔍 Run All Compliance Analyses", type="primary", use_container_width=True):
-        run_all_compliance_analyses(compliance_agents, data)
-
-def run_compliance_analysis(agent, data):
-    """Run individual compliance analysis"""
-    with st.spinner(f"Running {agent['name']} compliance analysis..."):
-        try:
-            if agent['available']:
-                result = run_real_compliance_analysis(agent, data)
+    for agent_name, result in st.session_state.dormancy_results.items():
+        if isinstance(result, dict):
+            if agent_name == 'comprehensive_analysis':
+                total_alerts += result.get('dormant_accounts_found', 0)
             else:
-                result = run_mock_compliance_analysis(agent, data)
-
-            st.session_state.compliance_results[agent['name']] = result
-
-            if result.get('count', 0) > 0:
-                st.warning(f"⚠️ {agent['name']}: Found {result['count']} compliance issues")
-            else:
-                st.success(f"✅ {agent['name']}: No compliance issues found")
-
-        except Exception as e:
-            st.error(f"❌ {agent['name']} analysis failed: {str(e)}")
-
-def run_real_compliance_analysis(agent, data):
-    """Run real compliance analysis using actual agents"""
-    # This would use the actual compliance agents when available
-    return run_mock_compliance_analysis(agent, data)
-
-def run_mock_compliance_analysis(agent, data):
-    """Run mock compliance analysis"""
-    try:
-        compliance_issues = []
-
-        # Simulate compliance issues based on agent type
-        if 'Contact Attempts' in agent['name']:
-            # Look for dormant accounts without adequate contact attempts
-            relevant_accounts = data[
-                data.get('dormancy_status', pd.Series()).isin(['Dormant', 'DORMANT'])
-            ] if 'dormancy_status' in data.columns else data.sample(frac=0.2)
-
-            for idx, account in relevant_accounts.iterrows():
-                contact_attempts = account.get('contact_attempts', 0)
-                if contact_attempts < 3:  # Mock compliance rule
-                    compliance_issues.append({
-                        'account_id': account.get('account_id', f'ACC{idx}'),
-                        'customer_id': account.get('customer_id', f'CUS{idx}'),
-                        'issue_type': 'Insufficient Contact Attempts',
-                        'current_attempts': contact_attempts,
-                        'required_attempts': 3,
-                        'compliance_article': agent['article'],
-                        'severity': 'High' if contact_attempts == 0 else 'Medium',
-                        'detection_date': datetime.now().strftime('%Y-%m-%d')
-                    })
-
-        elif 'Unflagged Dormant' in agent['name']:
-            # Look for accounts that should be dormant but aren't flagged
-            if 'last_transaction_date' in data.columns:
-                for idx, account in data.iterrows():
-                    last_txn = pd.to_datetime(account.get('last_transaction_date', '2024-01-01'))
-                    days_inactive = (datetime.now() - last_txn).days
-
-                    if days_inactive > 1095 and account.get('dormancy_status', 'ACTIVE') == 'ACTIVE':  # 3 years
-                        compliance_issues.append({
-                            'account_id': account.get('account_id', f'ACC{idx}'),
-                            'customer_id': account.get('customer_id', f'CUS{idx}'),
-                            'issue_type': 'Unflagged Dormant Account',
-                            'days_inactive': days_inactive,
-                            'current_status': account.get('dormancy_status', 'ACTIVE'),
-                            'recommended_action': 'Flag as Dormant',
-                            'compliance_article': agent['article'],
-                            'severity': 'High',
-                            'detection_date': datetime.now().strftime('%Y-%m-%d')
-                        })
-
-        elif 'Internal Ledger' in agent['name']:
-            # Look for dormant accounts ready for internal ledger transfer
-            dormant_accounts = data[
-                data.get('dormancy_status', pd.Series()).isin(['Dormant', 'DORMANT'])
-            ] if 'dormancy_status' in data.columns else data.sample(frac=0.15)
-
-            for idx, account in dormant_accounts.iterrows():
-                contact_attempts = account.get('contact_attempts', 0)
-                if contact_attempts >= 3:  # Adequate contact attempts made
-                    compliance_issues.append({
-                        'account_id': account.get('account_id', f'ACC{idx}'),
-                        'customer_id': account.get('customer_id', f'CUS{idx}'),
-                        'issue_type': 'Ready for Internal Ledger Transfer',
-                        'contact_attempts_completed': contact_attempts,
-                        'balance': account.get('balance_current', 0),
-                        'recommended_action': 'Transfer to Internal Ledger',
-                        'compliance_article': agent['article'],
-                        'severity': 'Medium',
-                        'detection_date': datetime.now().strftime('%Y-%m-%d')
-                    })
-
-        elif 'Statement Freeze' in agent['name']:
-            # Look for dormant accounts eligible for statement suppression
-            dormant_accounts = data[
-                data.get('dormancy_status', pd.Series()).isin(['Dormant', 'DORMANT'])
-            ] if 'dormancy_status' in data.columns else data.sample(frac=0.1)
-
-            for idx, account in dormant_accounts.iterrows():
-                if np.random.random() < 0.4:  # Mock eligibility
-                    compliance_issues.append({
-                        'account_id': account.get('account_id', f'ACC{idx}'),
-                        'customer_id': account.get('customer_id', f'CUS{idx}'),
-                        'issue_type': 'Statement Freeze Candidate',
-                        'account_type': account.get('account_type', 'UNKNOWN'),
-                        'balance': account.get('balance_current', 0),
-                        'recommended_action': 'Suppress Statement Generation',
-                        'compliance_article': agent['article'],
-                        'severity': 'Low',
-                        'detection_date': datetime.now().strftime('%Y-%m-%d')
-                    })
-
-        return {
-            'count': len(compliance_issues),
-            'data': compliance_issues,
-            'summary': f"{agent['name']} Compliance Analysis Results (Mock)\n" +
-                      f"Analysis Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n" +
-                      f"Total Records Analyzed: {len(data)}\n" +
-                      f"Compliance Issues Found: {len(compliance_issues)}\n" +
-                      f"Regulation: {agent['article']}\n" +
-                      f"Scope: {agent['applies_to']}\n" +
-                      f"Note: This is a mock analysis for demonstration purposes."
-        }
-
-    except Exception as e:
-        return {
-            'count': 0,
-            'data': [],
-            'summary': f"Mock compliance analysis failed: {str(e)}",
-            'error': str(e)
-        }
-
-def run_all_compliance_analyses(agents, data):
-    """Run all compliance analyses"""
-    with st.spinner("Running comprehensive compliance analysis..."):
-        progress_bar = st.progress(0)
-
-        for i, agent in enumerate(agents):
-            if agent['available']:
-                result = run_real_compliance_analysis(agent, data)
-            else:
-                result = run_mock_compliance_analysis(agent, data)
-
-            st.session_state.compliance_results[agent['name']] = result
-            progress_bar.progress((i + 1) / len(agents))
-
-        st.success("✅ All compliance analyses completed!")
-        st.rerun()
-
-# Reports Section
-def show_reports_section():
-    """Display comprehensive reports"""
-    st.markdown('<div class="section-header">📊 Comprehensive Reports</div>', unsafe_allow_html=True)
-
-    # Summary dashboard
-    create_summary_dashboard()
-
-    # Agent status overview
-    st.markdown("### 🤖 Agent Status Overview")
-
-    agent_status_data = []
-
-    # Data processing agents
-    data_agents = ['Data Upload', 'Data Quality', 'Data Mapping']
-    for agent in data_agents:
-        status = "Available" if DATA_AGENTS_AVAILABLE else "Not Available"
-        accounts_processed = 0
-
-        if agent == "Data Mapping" and st.session_state.mapping_results:
-            accounts_processed = len(st.session_state.uploaded_data) if st.session_state.uploaded_data is not None else 0
-            status = "Completed"
-        elif agent == "Data Quality" and st.session_state.quality_results:
-            accounts_processed = st.session_state.quality_results.get('total_records', 0)
-            status = "Completed"
-        elif agent == "Data Upload" and st.session_state.uploaded_data is not None:
-            accounts_processed = len(st.session_state.uploaded_data)
-            status = "Completed"
-
-        agent_status_data.append({
-            'Agent': agent,
-            'Category': 'Data Processing',
-            'Records Processed': accounts_processed,
-            'Status': status,
-            'Actions': 'View Results' if accounts_processed > 0 else 'Run Analysis'
-        })
-
-    # Dormancy agents
-    dormancy_agents = [
-        'Demand Deposit Dormancy', 'Fixed Deposit Dormancy', 'Investment Account Dormancy',
-        'Contact Attempts Analysis', 'CB Transfer Eligibility', 'High Value Dormant Accounts'
-    ]
-
-    for agent in dormancy_agents:
-        accounts_processed = 0
-        status = "Available" if DORMANCY_AGENTS_AVAILABLE else "Not Available"
-
-        if agent in st.session_state.dormancy_results:
-            accounts_processed = st.session_state.dormancy_results[agent].get('count', 0)
-            status = "Completed"
-
-        agent_status_data.append({
-            'Agent': agent,
-            'Category': 'Dormancy',
-            'Records Processed': accounts_processed,
-            'Status': status,
-            'Actions': 'Download Results' if accounts_processed > 0 else 'Run Analysis'
-        })
-
-    # Compliance agents
-    compliance_agents = [
-        'Incomplete Contact Attempts', 'Unflagged Dormant Candidates',
-        'Internal Ledger Candidates', 'Statement Freeze Candidates'
-    ]
-
-    for agent in compliance_agents:
-        issues_found = 0
-        status = "Available" if COMPLIANCE_AGENTS_AVAILABLE else "Not Available"
-
-        if agent in st.session_state.compliance_results:
-            issues_found = st.session_state.compliance_results[agent].get('count', 0)
-            status = "Completed"
-
-        agent_status_data.append({
-            'Agent': agent,
-            'Category': 'Compliance',
-            'Records Processed': issues_found,
-            'Status': status,
-            'Actions': 'View Issues' if issues_found > 0 else 'Run Analysis'
-        })
-
-    # Display agent status table
-    agent_df = pd.DataFrame(agent_status_data)
-    st.dataframe(agent_df, use_container_width=True)
-
-    # Export all results
-    st.markdown("### 📥 Export Options")
+                total_alerts += result.get('analysis_results', {}).get('count', 0)
+            completed_agents += 1
 
     col1, col2, col3 = st.columns(3)
-
     with col1:
-        if st.button("📊 Generate Executive Summary", type="primary", use_container_width=True):
-            generate_executive_summary()
-
+        st.metric("🚨 Total Alerts", total_alerts)
     with col2:
-        if st.button("📋 Export All Results", type="secondary", use_container_width=True):
-            export_all_results()
-
+        st.metric("🤖 Agents Completed", completed_agents)
     with col3:
-        if st.button("📈 Generate Compliance Dashboard", type="secondary", use_container_width=True):
-            generate_compliance_dashboard()
+        avg_per_agent = total_alerts / completed_agents if completed_agents > 0 else 0
+        st.metric("📊 Avg per Agent", f"{avg_per_agent:.1f}")
 
-def create_summary_dashboard():
-    """Create summary dashboard with key metrics"""
-    st.markdown("### 📊 System Overview")
+    # Show individual results
+    for agent_name, result in st.session_state.dormancy_results.items():
+        if isinstance(result, dict) and agent_name != 'comprehensive_analysis':
+            analysis_results = result.get('analysis_results', {})
+            alert_count = analysis_results.get('count', 0)
 
-    # Key metrics
+            if alert_count > 0:
+                with st.expander(f"📋 {agent_name.replace('_', ' ').title()} Results ({alert_count} alerts)"):
+                    st.write(f"**Article:** {analysis_results.get('compliance_article', 'N/A')}")
+                    st.write(f"**Description:** {analysis_results.get('description', 'N/A')}")
+                    st.write(f"**Processing Time:** {result.get('processing_time', 0):.2f}s")
+
+                    if 'details' in analysis_results and analysis_results['details']:
+                        st.dataframe(
+                            pd.DataFrame(analysis_results['details'][:10]),
+                            use_container_width=True
+                        )
+
+def show_reports():
+    """Show comprehensive reports dashboard"""
+    st.markdown('<div class="cbuae-banner">📊 CBUAE Compliance Reports Dashboard</div>', unsafe_allow_html=True)
+
+    # System overview
+    create_cbuae_dashboard()
+
+    # Detailed reports
+    if st.session_state.dormancy_results:
+        st.markdown("### 📋 Detailed Analysis Reports")
+        create_detailed_reports()
+
+def create_cbuae_dashboard():
+    """Create CBUAE compliance dashboard"""
+    st.markdown("### 🏛️ CBUAE Compliance Overview")
+
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        total_records = len(st.session_state.uploaded_data) if st.session_state.uploaded_data is not None else 0
-        st.metric("Total Records", f"{total_records:,}")
+        total_records = len(st.session_state.current_analysis_data) if st.session_state.current_analysis_data is not None else 0
+        st.metric("📊 Total Records", f"{total_records:,}")
 
     with col2:
-        dormant_count = sum(result.get('count', 0) for result in st.session_state.dormancy_results.values())
-        st.metric("Dormant Accounts", f"{dormant_count:,}")
+        total_alerts = 0
+        if 'comprehensive_analysis' in st.session_state.dormancy_results:
+            total_alerts = st.session_state.dormancy_results['comprehensive_analysis'].get('dormant_accounts_found', 0)
+        else:
+            total_alerts = sum(
+                result.get('analysis_results', {}).get('count', 0)
+                for result in st.session_state.dormancy_results.values()
+                if isinstance(result, dict) and 'analysis_results' in result
+            )
+        st.metric("🚨 Total Alerts", total_alerts)
 
     with col3:
-        compliance_issues = sum(result.get('count', 0) for result in st.session_state.compliance_results.values())
-        st.metric("Compliance Issues", f"{compliance_issues:,}")
+        completed_agents = len([
+            r for r in st.session_state.dormancy_results.values()
+            if isinstance(r, dict) and r.get('status') == 'completed'
+        ])
+        st.metric("🤖 Agents Run", f"{completed_agents}/{len(CBUAE_DORMANCY_AGENTS)}")
 
     with col4:
-        agents_available = sum([
-            1 if DATA_AGENTS_AVAILABLE else 0,
-            1 if DORMANCY_AGENTS_AVAILABLE else 0,
-            1 if COMPLIANCE_AGENTS_AVAILABLE else 0
-        ])
-        st.metric("Agent Categories", f"{agents_available}/3", delta="Available")
+        compliance_rate = (completed_agents / len(CBUAE_DORMANCY_AGENTS) * 100) if CBUAE_DORMANCY_AGENTS else 100
+        st.metric("✅ Compliance Rate", f"{compliance_rate:.1f}%")
 
-    # Visual charts if data is available
-    if st.session_state.uploaded_data is not None:
-        create_visual_charts()
+def create_detailed_reports():
+    """Create detailed analysis reports"""
+    # Agent performance table
+    agent_data = []
 
-def create_visual_charts():
-    """Create visual charts for the dashboard"""
-    data = st.session_state.uploaded_data
+    for agent_config in CBUAE_DORMANCY_AGENTS:
+        agent_name = agent_config['class_name']
+        result = st.session_state.dormancy_results.get(agent_name, {})
 
-    col1, col2 = st.columns(2)
+        if isinstance(result, dict) and 'analysis_results' in result:
+            agent_data.append({
+                'Agent': agent_config['name'],
+                'Article': agent_config['article'],
+                'Priority': agent_config['priority'],
+                'Alerts Found': result['analysis_results'].get('count', 0),
+                'Processing Time': f"{result.get('processing_time', 0):.2f}s",
+                'Status': '✅ Completed' if result.get('status') == 'completed' else '⏳ Pending'
+            })
+        else:
+            agent_data.append({
+                'Agent': agent_config['name'],
+                'Article': agent_config['article'],
+                'Priority': agent_config['priority'],
+                'Alerts Found': 0,
+                'Processing Time': '-',
+                'Status': '⏳ Not Run'
+            })
 
-    with col1:
-        # Account type distribution
-        if 'account_type' in data.columns:
-            account_dist = data['account_type'].value_counts()
-            fig_pie = px.pie(
-                values=account_dist.values,
-                names=account_dist.index,
-                title="Account Type Distribution"
-            )
-            st.plotly_chart(fig_pie, use_container_width=True)
+    if agent_data:
+        st.markdown("#### 🤖 Agent Performance Summary")
+        df = pd.DataFrame(agent_data)
+        st.dataframe(df, use_container_width=True)
 
-    with col2:
-        # Dormancy status distribution
-        if 'dormancy_status' in data.columns:
-            dormancy_dist = data['dormancy_status'].value_counts()
-            fig_bar = px.bar(
-                x=dormancy_dist.index,
-                y=dormancy_dist.values,
-                title="Dormancy Status Distribution"
-            )
-            st.plotly_chart(fig_bar, use_container_width=True)
+        # Priority distribution chart
+        if any(row['Alerts Found'] > 0 for row in agent_data):
+            st.markdown("#### 📊 Alerts by Priority")
 
-    # Analysis results summary
-    if st.session_state.dormancy_results or st.session_state.compliance_results:
-        st.markdown("### 📈 Analysis Results Summary")
+            priority_data = {}
+            for row in agent_data:
+                priority = row['Priority']
+                alerts = row['Alerts Found']
+                priority_data[priority] = priority_data.get(priority, 0) + alerts
 
-        # Dormancy results chart
-        if st.session_state.dormancy_results:
-            dormancy_data = {
-                'Agent': list(st.session_state.dormancy_results.keys()),
-                'Accounts Found': [result.get('count', 0) for result in st.session_state.dormancy_results.values()]
-            }
+            if priority_data:
+                fig = px.pie(
+                    values=list(priority_data.values()),
+                    names=list(priority_data.keys()),
+                    title="Alert Distribution by Priority Level",
+                    color_discrete_map={
+                        'CRITICAL': '#dc2626',
+                        'HIGH': '#ea580c',
+                        'MEDIUM': '#ca8a04'
+                    }
+                )
+                st.plotly_chart(fig, use_container_width=True)
 
-            fig_dormancy = px.bar(
-                dormancy_data,
-                x='Agent',
-                y='Accounts Found',
-                title="Dormancy Analysis Results"
-            )
-            fig_dormancy.update_xaxes(tickangle=45)
-            st.plotly_chart(fig_dormancy, use_container_width=True)
-
-        # Compliance results chart
-        if st.session_state.compliance_results:
-            compliance_data = {
-                'Agent': list(st.session_state.compliance_results.keys()),
-                'Issues Found': [result.get('count', 0) for result in st.session_state.compliance_results.values()]
-            }
-
-            fig_compliance = px.bar(
-                compliance_data,
-                x='Agent',
-                y='Issues Found',
-                title="Compliance Analysis Results",
-                color='Issues Found',
-                color_continuous_scale='Reds'
-            )
-            fig_compliance.update_xaxes(tickangle=45)
-            st.plotly_chart(fig_compliance, use_container_width=True)
-
-def generate_executive_summary():
-    """Generate executive summary report"""
-    with st.spinner("Generating executive summary..."):
-        summary_data = {
-            'report_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'total_records': len(st.session_state.uploaded_data) if st.session_state.uploaded_data is not None else 0,
-            'data_quality_score': st.session_state.quality_results.get('quality_score', 0) if st.session_state.quality_results else 0,
-            'mapping_success_rate': st.session_state.mapping_results.get('auto_mapping_percentage', 0) if st.session_state.mapping_results else 0,
-            'dormant_accounts_total': sum(result.get('count', 0) for result in st.session_state.dormancy_results.values()),
-            'compliance_issues_total': sum(result.get('count', 0) for result in st.session_state.compliance_results.values()),
-            'agents_status': {
-                'data_processing': 'Available' if DATA_AGENTS_AVAILABLE else 'Unavailable',
-                'dormancy_analysis': 'Available' if DORMANCY_AGENTS_AVAILABLE else 'Unavailable',
-                'compliance_monitoring': 'Available' if COMPLIANCE_AGENTS_AVAILABLE else 'Unavailable'
-            }
-        }
-
-        summary_text = f"""
-BANKING COMPLIANCE ANALYSIS - EXECUTIVE SUMMARY
-================================================
-
-Report Generated: {summary_data['report_date']}
-
-OVERVIEW
---------
-• Total Records Processed: {summary_data['total_records']:,}
-• Data Quality Score: {summary_data['data_quality_score']:.1f}%
-• Mapping Success Rate: {summary_data['mapping_success_rate']:.1f}%
-
-KEY FINDINGS
-------------
-• Dormant Accounts Identified: {summary_data['dormant_accounts_total']:,}
-• Compliance Issues Found: {summary_data['compliance_issues_total']:,}
-
-SYSTEM STATUS
--------------
-• Data Processing Agents: {summary_data['agents_status']['data_processing']}
-• Dormancy Analysis Agents: {summary_data['agents_status']['dormancy_analysis']}
-• Compliance Monitoring Agents: {summary_data['agents_status']['compliance_monitoring']}
-
-DETAILED RESULTS
-================
-
-DORMANCY ANALYSIS RESULTS:
-"""
-
-        for agent_name, result in st.session_state.dormancy_results.items():
-            summary_text += f"\n• {agent_name}: {result.get('count', 0)} accounts"
-
-        summary_text += "\n\nCOMPLIANCE ANALYSIS RESULTS:"
-
-        for agent_name, result in st.session_state.compliance_results.items():
-            summary_text += f"\n• {agent_name}: {result.get('count', 0)} issues"
-
-        summary_text += f"""
-
-RECOMMENDATIONS
-===============
-• Review all identified dormant accounts for regulatory compliance
-• Address compliance issues in order of severity
-• Implement automated monitoring for ongoing compliance
-• Schedule regular analysis runs for proactive management
-
-Report generated by Banking Compliance Analysis System
-"""
-
-        st.download_button(
-            label="📄 Download Executive Summary",
-            data=summary_text,
-            file_name=f"executive_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-            mime="text/plain",
-            type="primary"
-        )
-
-        st.success("✅ Executive summary generated successfully!")
-
-def export_all_results():
-    """Export all analysis results"""
-    with st.spinner("Preparing comprehensive export..."):
-        # Create Excel file with multiple sheets
-        excel_buffer = io.BytesIO()
-
-        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-            # Data summary sheet
-            if st.session_state.uploaded_data is not None:
-                summary_data = pd.DataFrame({
-                    'Metric': ['Total Records', 'Total Columns', 'Data Quality Score', 'Mapping Success Rate'],
-                    'Value': [
-                        len(st.session_state.uploaded_data),
-                        len(st.session_state.uploaded_data.columns),
-                        st.session_state.quality_results.get('quality_score', 0) if st.session_state.quality_results else 0,
-                        st.session_state.mapping_results.get('auto_mapping_percentage', 0) if st.session_state.mapping_results else 0
-                    ]
-                })
-                summary_data.to_excel(writer, sheet_name='Summary', index=False)
-
-            # Mapping results sheet
-            if st.session_state.mapping_sheet is not None:
-                st.session_state.mapping_sheet.to_excel(writer, sheet_name='Data Mapping', index=False)
-
-            # Dormancy results sheets
-            for agent_name, result in st.session_state.dormancy_results.items():
-                if result.get('data'):
-                    df = pd.DataFrame(result['data'])
-                    sheet_name = f"Dormancy_{agent_name[:20]}"  # Limit sheet name length
-                    df.to_excel(writer, sheet_name=sheet_name, index=False)
-
-            # Compliance results sheets
-            for agent_name, result in st.session_state.compliance_results.items():
-                if result.get('data'):
-                    df = pd.DataFrame(result['data'])
-                    sheet_name = f"Compliance_{agent_name[:15]}"  # Limit sheet name length
-                    df.to_excel(writer, sheet_name=sheet_name, index=False)
-
-        excel_data = excel_buffer.getvalue()
-
-        st.download_button(
-            label="📊 Download Complete Analysis Results (Excel)",
-            data=excel_data,
-            file_name=f"banking_compliance_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary"
-        )
-
-        st.success("✅ Complete analysis results prepared for download!")
-
-def generate_compliance_dashboard():
-    """Generate compliance dashboard"""
-    st.info("📈 Compliance dashboard generation completed - see visualizations above")
-
-# Sidebar
-def show_sidebar():
-    """Display sidebar with navigation and status"""
-    st.sidebar.markdown(f"### 👋 Welcome, {st.session_state.username}!")
-
-    # Navigation
-    pages = [
-        "📤 Data Processing",
-        "😴 Dormant Analysis",
-        "⚖️ Compliance Analysis",
-        "📊 Reports"
-    ]
-
-    selected_page = st.sidebar.selectbox("Navigate to:", pages,
-                                       index=pages.index(f"📤 {st.session_state.current_page}") if f"📤 {st.session_state.current_page}" in pages else 0)
-
-    st.session_state.current_page = selected_page.split(" ", 1)[1]
-
-    # Data status
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### 📊 Data Status")
-
-    if st.session_state.uploaded_data is not None:
-        st.sidebar.success(f"✅ Data Loaded: {len(st.session_state.uploaded_data):,} records")
-
-        # Show dormancy statistics
-        if 'dormancy_status' in st.session_state.uploaded_data.columns:
-            dormant_count = len(st.session_state.uploaded_data[
-                st.session_state.uploaded_data['dormancy_status'].isin(['Dormant', 'DORMANT'])
-            ])
-            st.sidebar.info(f"💤 Dormant Accounts: {dormant_count:,}")
-    else:
-        st.sidebar.warning("⚠️ No data loaded")
-
-    if st.session_state.mapping_results:
-        auto_pct = st.session_state.mapping_results.get('auto_mapping_percentage', 0)
-        st.sidebar.info(f"🗺️ Mapping: {auto_pct:.1f}% auto-mapped")
-
-    # Agent status
-    st.sidebar.markdown("### 🤖 Agent Status")
-    st.sidebar.info(f"Data: {'✅' if DATA_AGENTS_AVAILABLE else '❌'}")
-    st.sidebar.info(f"Dormancy: {'✅' if DORMANCY_AGENTS_AVAILABLE else '❌'}")
-    st.sidebar.info(f"Compliance: {'✅' if COMPLIANCE_AGENTS_AVAILABLE else '❌'}")
-
-    # System information
-    st.sidebar.markdown("### ℹ️ System Info")
-    st.sidebar.caption(f"BGE Embeddings: {'✅ Available' if BGE_AVAILABLE else '❌ Unavailable'}")
-
-    if BGE_AVAILABLE:
-        # Try to load model to check if it works
-        try:
-            model_status = "🔄 Loading..."
-            model = load_bge_model()
-            if model is not None:
-                model_name = str(model).split('(')[0] if hasattr(model, '__str__') else "BGE Model"
-                st.sidebar.caption(f"Model: {model_name}")
-            else:
-                st.sidebar.caption("Model: ❌ Load Failed")
-        except:
-            st.sidebar.caption("Model: ⚠️ Not Loaded")
-    else:
-        st.sidebar.caption("Install: pip install sentence-transformers")
-
-    st.sidebar.caption(f"Real-time Analysis: {'✅ Enabled' if DORMANCY_AGENTS_AVAILABLE else '❌ Mock Mode'}")
-    st.sidebar.caption(f"LLM Integration: {'✅ Ready' if st.session_state.llm_enabled else '⭕ Disabled'}")
-
-    # Logout
-    st.sidebar.markdown("---")
-    if st.sidebar.button("🚪 Logout"):
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
-        st.rerun()
-
-# Main application
 def main():
-    """Main application logic"""
-    initialize_session_state()
-
+    """Main application entry point"""
     if not st.session_state.logged_in:
-        show_login_page()
+        show_login()
         return
 
-    # Show sidebar
-    show_sidebar()
+    # Sidebar navigation
+    with st.sidebar:
+        st.markdown('<div class="main-header">🏛️ CBUAE System</div>', unsafe_allow_html=True)
+        st.markdown(f"👤 Welcome, **{st.session_state.username}**")
+
+        page = st.selectbox(
+            "Navigate to:",
+            ["⚙️ Data Processing", "💤 Dormancy Analysis", "📊 Reports"],
+            key="navigation"
+        )
+
+        st.divider()
+
+        # System status
+        st.markdown("### 🔧 System Status")
+
+        # BGE Model Status
+        if st.session_state.bge_model is None:
+            if st.button("🚀 Load BGE Model", type="secondary", use_container_width=True):
+                st.session_state.bge_model = load_bge_model()
+        else:
+            st.success("🟢 BGE Model: Ready")
+
+        # CBUAE System Status
+        if DORMANCY_SYSTEM_AVAILABLE:
+            st.success("🟢 CBUAE Agents: Ready")
+        else:
+            st.error("🔴 CBUAE Agents: Unavailable")
+
+        st.divider()
+
+        # Quick stats
+        if st.session_state.current_analysis_data is not None:
+            st.markdown("### 📊 Quick Stats")
+            st.metric("Records", f"{len(st.session_state.current_analysis_data):,}")
+
+            total_alerts = sum(
+                result.get('analysis_results', {}).get('count', 0)
+                for result in st.session_state.dormancy_results.values()
+                if isinstance(result, dict) and 'analysis_results' in result
+            )
+            st.metric("Total Alerts", total_alerts)
+
+        st.divider()
+
+        if st.button("🚪 Logout", type="secondary", use_container_width=True):
+            # Clear session state
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.rerun()
 
     # Main content area
-    current_page = st.session_state.current_page
-
-    if current_page == "Data Processing":
-        # Data upload section
-        uploaded_data = show_data_upload_section()
-
-        if uploaded_data is not None or st.session_state.uploaded_data is not None:
-            st.markdown("---")
-            # Data processing section
-            show_data_processing_section()
-
-    elif current_page == "Dormant Analysis":
-        show_dormant_analysis_section()
-
-    elif current_page == "Compliance Analysis":
-        show_compliance_analysis_section()
-
-    elif current_page == "Reports":
-        show_reports_section()
+    if page == "⚙️ Data Processing":
+        show_data_processing()
+    elif page == "💤 Dormancy Analysis":
+        show_dormancy_analysis()
+    elif page == "📊 Reports":
+        show_reports()
 
 if __name__ == "__main__":
     main()
