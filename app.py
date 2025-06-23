@@ -2439,14 +2439,14 @@ def display_executive_summary():
 
     with col2:
         if st.session_state.dormancy_results:
-            total_dormant = st.session_state.dormancy_results.get('total_dormant_accounts_found', 0)
+            total_dormant = safe_getattr(st.session_state.dormancy_results, 'total_dormant_accounts_found', 0)
             st.metric("💤 Dormant Accounts", f"{total_dormant:,}")
         else:
             st.metric("💤 Dormant Accounts", "N/A")
 
     with col3:
         if st.session_state.compliance_results:
-            total_violations = st.session_state.compliance_results.get('total_violations', 0)
+            total_violations = safe_getattr(st.session_state.compliance_results, 'total_violations', 0)
             st.metric("⚠️ Compliance Violations", f"{total_violations:,}")
         else:
             st.metric("⚠️ Compliance Violations", "N/A")
@@ -2657,7 +2657,7 @@ def display_data_summary_report():
             st.write(f"• Total Columns: {len(processed_data.columns)}")
             st.write(f"• Memory Usage: {processed_data.memory_usage(deep=True).sum() / 1024 / 1024:.1f} MB")
 
-            # Show mapping information
+            # Show mapping information using safe_getattr
             if st.session_state.mapping_results:
                 mappings = safe_getattr(st.session_state.mapping_results, 'mappings', {})
                 mapped_fields = len([col for col in processed_data.columns if col in get_comprehensive_banking_schema().keys()])
@@ -2668,20 +2668,23 @@ def display_data_summary_report():
             st.write("• No processed data available")
             st.write("• Please complete column mapping")
 
-    # Quality information
+    # Quality information using safe_getattr
     if st.session_state.quality_results:
         st.markdown("#### 📈 Data Quality Metrics")
         quality = st.session_state.quality_results
 
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.write(f"• Overall Score: {safe_getattr(quality, 'overall_score', 0):.1f}%")
+            overall_score = safe_getattr(quality, 'overall_score', 0)
+            st.write(f"• Overall Score: {overall_score:.1f}%")
         with col2:
-            st.write(f"• Missing Data: {safe_getattr(quality, 'missing_percentage', 0):.1f}%")
+            missing_percentage = safe_getattr(quality, 'missing_percentage', 0)
+            st.write(f"• Missing Data: {missing_percentage:.1f}%")
         with col3:
-            st.write(f"• Quality Level: {safe_getattr(quality, 'quality_level', 'unknown').upper()}")
+            quality_level = safe_getattr(quality, 'quality_level', 'unknown')
+            st.write(f"• Quality Level: {str(quality_level).upper()}")
 
-    # Show column transformation if mapping exists
+    # Show column transformation if mapping exists using safe_getattr
     if st.session_state.mapping_results and processed_data is not None:
         with st.expander("🔄 Column Transformation Details"):
             mappings = safe_getattr(st.session_state.mapping_results, 'mappings', {})
@@ -2706,21 +2709,27 @@ def display_dormancy_detailed_report():
 
     st.markdown("#### 💤 Dormancy Analysis Details")
 
-    if results.get('agent_results'):
+    # Use safe_getattr for consistent access
+    agent_results = safe_getattr(results, 'agent_results', {})
+
+    if agent_results:
         # Create detailed breakdown
         agent_breakdown = []
-        for agent_name, agent_result in results['agent_results'].items():
-            if agent_result.get('dormant_records_found', 0) > 0:
+        for agent_name, agent_result in agent_results.items():
+            dormant_found = safe_getattr(agent_result, 'dormant_records_found', 0)
+            if dormant_found > 0:
                 agent_breakdown.append({
                     'Agent': agent_name.replace('_', ' ').title(),
-                    'Records Processed': agent_result.get('records_processed', 0),
-                    'Dormant Found': agent_result.get('dormant_records_found', 0),
-                    'Processing Time (s)': f"{agent_result.get('processing_time', 0):.2f}",
-                    'Success': '✅' if agent_result.get('success') else '❌'
+                    'Records Processed': safe_getattr(agent_result, 'records_processed', 0),
+                    'Dormant Found': dormant_found,
+                    'Processing Time (s)': f"{safe_getattr(agent_result, 'processing_time', 0):.2f}",
+                    'Success': '✅' if safe_getattr(agent_result, 'success', False) else '❌'
                 })
 
         if agent_breakdown:
             st.dataframe(pd.DataFrame(agent_breakdown), use_container_width=True)
+    else:
+        st.info("No detailed agent results available")
 
 def display_compliance_detailed_report():
     """Display detailed compliance analysis report"""
@@ -2728,17 +2737,24 @@ def display_compliance_detailed_report():
 
     st.markdown("#### ⚖️ Compliance Analysis Details")
 
-    # Display compliance summary if available
-    if results.get('compliance_summary'):
-        summary = results['compliance_summary']
+    # Use safe_getattr for consistent access
+    compliance_summary = safe_getattr(results, 'compliance_summary', {})
 
+    # Display compliance summary if available
+    if compliance_summary:
         col1, col2 = st.columns(2)
         with col1:
-            st.write(f"• Total Accounts Analyzed: {summary.get('total_accounts_analyzed', 0):,}")
-            st.write(f"• Total Violations Found: {summary.get('total_violations_found', 0):,}")
+            total_analyzed = safe_getattr(compliance_summary, 'total_accounts_analyzed', 0)
+            total_violations = safe_getattr(compliance_summary, 'total_violations_found', 0)
+            st.write(f"• Total Accounts Analyzed: {total_analyzed:,}")
+            st.write(f"• Total Violations Found: {total_violations:,}")
         with col2:
-            st.write(f"• Total Actions Generated: {summary.get('total_actions_generated', 0):,}")
-            st.write(f"• Processing Time: {summary.get('processing_time', 0):.2f}s")
+            total_actions = safe_getattr(compliance_summary, 'total_actions_generated', 0)
+            processing_time = safe_getattr(compliance_summary, 'processing_time', 0)
+            st.write(f"• Total Actions Generated: {total_actions:,}")
+            st.write(f"• Processing Time: {processing_time:.2f}s")
+    else:
+        st.info("No detailed compliance summary available")
 
 def display_processing_log():
     """Display processing activity log"""
@@ -2764,27 +2780,31 @@ def display_processing_log():
         })
 
     if st.session_state.mapping_results:
+        # Use safe_getattr to handle both dict and dataclass formats
+        mappings = safe_getattr(st.session_state.mapping_results, 'mappings', {})
         activities.append({
             'Timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'Activity': 'Column Mapping',
             'Status': '✅ Completed',
-            'Records': len(st.session_state.mapping_results.get('mappings', {}))
+            'Records': len(mappings) if mappings else 0
         })
 
     if st.session_state.dormancy_results:
+        total_dormant = safe_getattr(st.session_state.dormancy_results, 'total_dormant_accounts_found', 0)
         activities.append({
             'Timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'Activity': 'Dormancy Analysis',
             'Status': '✅ Completed',
-            'Records': st.session_state.dormancy_results.get('total_dormant_accounts_found', 0)
+            'Records': total_dormant
         })
 
     if st.session_state.compliance_results:
+        total_violations = safe_getattr(st.session_state.compliance_results, 'total_violations', 0)
         activities.append({
             'Timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'Activity': 'Compliance Analysis',
             'Status': '✅ Completed',
-            'Records': st.session_state.compliance_results.get('total_violations', 0)
+            'Records': total_violations
         })
 
     if activities:
