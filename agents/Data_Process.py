@@ -44,12 +44,10 @@ except ImportError:
     logging.warning("Cloud dependencies not available for some upload methods")
 
 # Memory agent imports
-try:
-    from memory_agent import HybridMemoryAgent, MemoryContext, MemoryBucket, MemoryPriority
-    MEMORY_AGENT_AVAILABLE = True
-except ImportError:
-    MEMORY_AGENT_AVAILABLE = False
-    logging.warning("Memory agent not available")
+
+from agents.memory_agent import HybridMemoryAgent, MemoryContext, MemoryBucket, MemoryPriority
+MEMORY_AGENT_AVAILABLE = True
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

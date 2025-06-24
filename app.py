@@ -1,7 +1,6 @@
 """
-Comprehensive Banking Compliance Streamlit Application
-Integrates: Data Processing (4 upload methods), Quality Analysis, BGE Mapping,
-Dormancy Analysis (11 agents), Compliance Verification (17 agents), and Reporting
+Comprehensive Banking Compliance Analysis Streamlit Application
+Integrates all dormancy and compliance agents with full CSV export capabilities
 """
 
 import streamlit as st
@@ -9,157 +8,22 @@ import pandas as pd
 import numpy as np
 import asyncio
 import json
-import logging
 import io
-import tempfile
-import secrets
+import base64
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import warnings
+warnings.filterwarnings('ignore')
 
-# Configure page
-st.set_page_config(
-    page_title="CBUAE Banking Compliance System",
-    page_icon="🏦",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# Enhanced CSS styling
-st.markdown("""
-<style>
-    .main-header {
-        font-size: 3rem;
-        font-weight: bold;
-        color: #1f77b4;
-        text-align: center;
-        margin-bottom: 2rem;
-        padding: 1rem;
-        background: linear-gradient(90deg, #e3f2fd, #f8f9fa);
-        border-radius: 10px;
-        border-left: 5px solid #1f77b4;
-    }
-    
-    .section-header {
-        font-size: 1.8rem;
-        font-weight: bold;
-        color: #2c3e50;
-        margin: 2rem 0 1rem 0;
-        padding: 1rem;
-        background: linear-gradient(90deg, #f1f8ff, #ffffff);
-        border-radius: 8px;
-        border-left: 4px solid #3498db;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    
-    .metric-card {
-        background: white;
-        padding: 1.5rem;
-        border-radius: 10px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        border-left: 5px solid #27ae60;
-        margin: 1rem 0;
-    }
-    
-    .warning-card {
-        background: #fff3cd;
-        border: 1px solid #ffeaa7;
-        border-radius: 8px;
-        padding: 1rem;
-        margin: 1rem 0;
-    }
-    
-    .error-card {
-        background: #f8d7da;
-        border: 1px solid #f5c6cb;
-        border-radius: 8px;
-        padding: 1rem;
-        margin: 1rem 0;
-    }
-    
-    .success-card {
-        background: #d4edda;
-        border: 1px solid #c3e6cb;
-        border-radius: 8px;
-        padding: 1rem;
-        margin: 1rem 0;
-    }
-    
-    .agent-card {
-        background: white;
-        border: 2px solid #e9ecef;
-        border-radius: 10px;
-        padding: 1.5rem;
-        margin: 1rem 0;
-        transition: all 0.3s ease;
-    }
-    
-    .agent-card:hover {
-        border-color: #3498db;
-        box-shadow: 0 4px 12px rgba(52, 152, 219, 0.15);
-        transform: translateY(-2px);
-    }
-    
-    .login-container {
-        max-width: 400px;
-        margin: 2rem auto;
-        padding: 2rem;
-        background: white;
-        border-radius: 15px;
-        box-shadow: 0 8px 32px rgba(0,0,0,0.1);
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# ===================== AGENT IMPORTS =====================
-
-# Initialize agent status tracking
-AGENTS_STATUS = {
-    'unified_data_processing': False,
-    'data_upload': False,
-    'data_mapping': False,
-    'data_quality': False,
-    'bge_embeddings': False,
-    'dormancy': False,
-    'compliance': False
-}
-
-def safe_import_agent(module_name: str, items: List[str]) -> tuple[bool, Dict]:
-    """Safely import agent modules with error handling"""
-    try:
-        exec(f"from {module_name} import {', '.join(items)}")
-        imported_items = {item: locals()[item] for item in items}
-        logger.info(f"✅ Successfully imported {module_name}")
-        return True, imported_items
-    except ImportError as e:
-        logger.warning(f"⚠️ Could not import {module_name}: {e}")
-        return False, {}
-    except Exception as e:
-        logger.error(f"❌ Error importing {module_name}: {e}")
-        return False, {}
-
-# Import Unified Data Processing Agent
+# Import all agents from repository
 try:
-    from agents.Data_Process import UnifiedDataProcessingAgent, create_unified_data_processing_agent
-    AGENTS_STATUS['unified_data_processing'] = True
-    AGENTS_STATUS['data_upload'] = True
-    AGENTS_STATUS['data_mapping'] = True
-    AGENTS_STATUS['data_quality'] = True
-    AGENTS_STATUS['bge_embeddings'] = True
-    logger.info("✅ Unified Data Processing Agent loaded successfully")
-except ImportError as e:
-    logger.warning(f"⚠️ Unified Data Processing Agent not available: {e}")
-
-# Import Dormancy Agents
-try:
-    from agents.Dormant_agent import (
-        run_comprehensive_dormancy_analysis_csv,
+    # Dormancy Agents (10 agents)
+    from agents.dormant_agent import (
+        DormancyWorkflowOrchestrator,
+        run_comprehensive_dormancy_analysis_with_csv,
         DemandDepositDormancyAgent,
         FixedDepositDormancyAgent,
         InvestmentAccountDormancyAgent,
@@ -170,728 +34,240 @@ try:
         DormancyEscalationAgent,
         StatementSuppressionAgent,
         InternalLedgerTransferAgent,
-        DormancyWorkflowOrchestrator
+        get_all_csv_download_info
     )
-    AGENTS_STATUS['dormancy'] = True
-    logger.info("✅ Dormancy agents loaded successfully")
+    DORMANCY_AGENTS_AVAILABLE = True
 except ImportError as e:
-    logger.warning(f"⚠️ Dormancy agents not available: {e}")
+    st.error(f"❌ Dormancy agents not available: {e}")
+    DORMANCY_AGENTS_AVAILABLE = False
 
-# Import Compliance Verification Agents
 try:
+    # Compliance Agents (17 agents)
     from agents.compliance_verification_agent import (
-        run_comprehensive_compliance_analysis_csv,
+        ComplianceWorkflowOrchestrator,
+        run_comprehensive_compliance_analysis_with_csv,
         DetectIncompleteContactAttemptsAgent,
         DetectUnflaggedDormantCandidatesAgent,
-        DetectInternalLedgerCandidatesAgent,
         DetectStatementFreezeCandidatesAgent,
-        DetectCBUAETransferCandidatesAgent,
         DetectForeignCurrencyConversionNeededAgent,
+        DetectSDBCourtApplicationNeededAgent,
+        DetectUnclaimedPaymentInstrumentsLedgerAgent,
+        DetectClaimProcessingPendingAgent,
         GenerateAnnualCBUAEReportSummaryAgent,
         CheckRecordRetentionComplianceAgent,
-        RunAllComplianceChecksAgent
+        LogFlagInstructionsAgent,
+        get_all_compliance_csv_download_info,
+        get_all_compliance_agents_info
     )
-    AGENTS_STATUS['compliance'] = True
-    logger.info("✅ Compliance verification agents loaded successfully")
+    COMPLIANCE_AGENTS_AVAILABLE = True
 except ImportError as e:
-    logger.warning(f"⚠️ Compliance verification agents not available: {e}")
+    st.error(f"❌ Compliance agents not available: {e}")
+    COMPLIANCE_AGENTS_AVAILABLE = False
 
-# ===================== SESSION STATE INITIALIZATION =====================
+try:
+    # Data Processing Agents
+    from agents.Data_Process import (
+        UnifiedDataProcessingAgent,
+        DataQualityAnalyzer,
+        UploadResult,
+        QualityResult,
+        MappingResult
+    )
+    DATA_PROCESSING_AVAILABLE = True
+except ImportError as e:
+    st.error(f"❌ Data processing agents not available: {e}")
+    DATA_PROCESSING_AVAILABLE = False
 
+# Page configuration
+st.set_page_config(
+    page_title="🏛️ CBUAE Banking Compliance System",
+    page_icon="🏛️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Custom CSS
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 2.5rem;
+        font-weight: bold;
+        text-align: center;
+        background: linear-gradient(90deg, #1f4e79, #2e8b57);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-bottom: 2rem;
+    }
+    
+    .section-header {
+        font-size: 1.8rem;
+        font-weight: bold;
+        color: #1f4e79;
+        margin: 1.5rem 0 1rem 0;
+        padding: 0.5rem;
+        border-left: 4px solid #2e8b57;
+        background-color: #f0f8ff;
+    }
+    
+    .agent-card {
+        border: 1px solid #e0e0e0;
+        border-radius: 8px;
+        padding: 1rem;
+        margin: 0.5rem 0;
+        background-color: #fafafa;
+    }
+    
+    .metric-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 1rem;
+        border-radius: 10px;
+        color: white;
+        text-align: center;
+    }
+    
+    .download-button {
+        background-color: #28a745;
+        color: white;
+        border: none;
+        padding: 0.5rem 1rem;
+        border-radius: 5px;
+        cursor: pointer;
+    }
+    
+    .status-success { color: #28a745; font-weight: bold; }
+    .status-warning { color: #ffc107; font-weight: bold; }
+    .status-error { color: #dc3545; font-weight: bold; }
+</style>
+""", unsafe_allow_html=True)
+
+# Banking Compliance Schema (66 fields from project knowledge)
+BANKING_SCHEMA = {
+    'customer_id': {'required': True, 'type': 'string', 'description': 'Unique customer identifier'},
+    'customer_type': {'required': False, 'type': 'string', 'description': 'Type of customer (Individual/Corporate)'},
+    'full_name_en': {'required': False, 'type': 'string', 'description': 'Customer full name in English'},
+    'full_name_ar': {'required': False, 'type': 'string', 'description': 'Customer full name in Arabic'},
+    'id_number': {'required': False, 'type': 'integer', 'description': 'Customer ID number'},
+    'id_type': {'required': False, 'type': 'string', 'description': 'Type of ID document'},
+    'date_of_birth': {'required': False, 'type': 'date', 'description': 'Customer date of birth'},
+    'nationality': {'required': False, 'type': 'string', 'description': 'Customer nationality'},
+    'address_line1': {'required': False, 'type': 'string', 'description': 'Primary address line'},
+    'address_line2': {'required': False, 'type': 'string', 'description': 'Secondary address line'},
+    'city': {'required': False, 'type': 'string', 'description': 'City'},
+    'emirate': {'required': False, 'type': 'string', 'description': 'Emirate'},
+    'country': {'required': False, 'type': 'string', 'description': 'Country'},
+    'postal_code': {'required': False, 'type': 'integer', 'description': 'Postal code'},
+    'phone_primary': {'required': False, 'type': 'float', 'description': 'Primary phone number'},
+    'phone_secondary': {'required': False, 'type': 'float', 'description': 'Secondary phone number'},
+    'email_primary': {'required': False, 'type': 'string', 'description': 'Primary email address'},
+    'email_secondary': {'required': False, 'type': 'string', 'description': 'Secondary email address'},
+    'address_known': {'required': False, 'type': 'string', 'description': 'Address verification status'},
+    'last_contact_date': {'required': True, 'type': 'date', 'description': 'Date of last customer contact'},
+    'last_contact_method': {'required': False, 'type': 'string', 'description': 'Method of last contact'},
+    'kyc_status': {'required': False, 'type': 'string', 'description': 'KYC compliance status'},
+    'kyc_expiry_date': {'required': False, 'type': 'date', 'description': 'KYC expiry date'},
+    'risk_rating': {'required': False, 'type': 'string', 'description': 'Customer risk rating'},
+    'account_id': {'required': True, 'type': 'string', 'description': 'Unique account identifier'},
+    'account_type': {'required': True, 'type': 'string', 'description': 'Type of account'},
+    'account_subtype': {'required': False, 'type': 'string', 'description': 'Account subtype'},
+    'account_name': {'required': False, 'type': 'string', 'description': 'Account name'},
+    'currency': {'required': True, 'type': 'string', 'description': 'Account currency'},
+    'account_status': {'required': True, 'type': 'string', 'description': 'Account status'},
+    'dormancy_status': {'required': True, 'type': 'string', 'description': 'Dormancy classification'},
+    'opening_date': {'required': True, 'type': 'date', 'description': 'Account opening date'},
+    'closing_date': {'required': False, 'type': 'date', 'description': 'Account closing date'},
+    'last_transaction_date': {'required': True, 'type': 'date', 'description': 'Date of last transaction'},
+    'last_system_transaction_date': {'required': False, 'type': 'date', 'description': 'Date of last system transaction'},
+    'balance_current': {'required': True, 'type': 'float', 'description': 'Current account balance'},
+    'balance_available': {'required': False, 'type': 'float', 'description': 'Available balance'},
+    'balance_minimum': {'required': False, 'type': 'integer', 'description': 'Minimum balance requirement'},
+    'interest_rate': {'required': False, 'type': 'float', 'description': 'Interest rate'},
+    'interest_accrued': {'required': False, 'type': 'float', 'description': 'Accrued interest'},
+    'is_joint_account': {'required': False, 'type': 'string', 'description': 'Joint account indicator'},
+    'joint_account_holders': {'required': False, 'type': 'float', 'description': 'Number of joint holders'},
+    'has_outstanding_facilities': {'required': False, 'type': 'string', 'description': 'Outstanding facilities indicator'},
+    'maturity_date': {'required': False, 'type': 'date', 'description': 'Account maturity date'},
+    'auto_renewal': {'required': False, 'type': 'string', 'description': 'Auto renewal setting'},
+    'last_statement_date': {'required': False, 'type': 'date', 'description': 'Last statement date'},
+    'statement_frequency': {'required': False, 'type': 'string', 'description': 'Statement frequency'},
+    'tracking_id': {'required': False, 'type': 'string', 'description': 'Tracking identifier'},
+    'dormancy_trigger_date': {'required': True, 'type': 'date', 'description': 'Date dormancy triggered'},
+    'dormancy_period_start': {'required': False, 'type': 'date', 'description': 'Dormancy period start'},
+    'dormancy_period_months': {'required': False, 'type': 'float', 'description': 'Dormancy period in months'},
+    'dormancy_classification_date': {'required': False, 'type': 'date', 'description': 'Date of dormancy classification'},
+    'transfer_eligibility_date': {'required': False, 'type': 'date', 'description': 'Transfer eligibility date'},
+    'current_stage': {'required': True, 'type': 'string', 'description': 'Current processing stage'},
+    'contact_attempts_made': {'required': True, 'type': 'integer', 'description': 'Number of contact attempts'},
+    'last_contact_attempt_date': {'required': False, 'type': 'date', 'description': 'Date of last contact attempt'},
+    'waiting_period_start': {'required': False, 'type': 'date', 'description': 'Waiting period start date'},
+    'waiting_period_end': {'required': False, 'type': 'date', 'description': 'Waiting period end date'},
+    'transferred_to_ledger_date': {'required': False, 'type': 'date', 'description': 'Ledger transfer date'},
+    'transferred_to_cb_date': {'required': False, 'type': 'date', 'description': 'Central Bank transfer date'},
+    'cb_transfer_amount': {'required': False, 'type': 'float', 'description': 'Central Bank transfer amount'},
+    'cb_transfer_reference': {'required': False, 'type': 'string', 'description': 'CB transfer reference'},
+    'exclusion_reason': {'required': False, 'type': 'string', 'description': 'Exclusion reason'},
+    'created_date': {'required': False, 'type': 'date', 'description': 'Record creation date'},
+    'updated_date': {'required': False, 'type': 'date', 'description': 'Record update date'},
+    'updated_by': {'required': False, 'type': 'string', 'description': 'Updated by user'}
+}
+
+# Initialize session state
 def initialize_session_state():
-    """Initialize all session state variables"""
-    session_defaults = {
-        'logged_in': False,
-        'username': '',
-        'current_page': 'login',
-        'uploaded_data': None,
-        'processed_data': None,
-        'quality_results': None,
-        'mapping_results': None,
-        'dormancy_results': None,
-        'compliance_results': None,
-        'mapping_sheet': None,
-        'llm_enabled': False,
-        'upload_method': 'file',
-        'agent_session_id': None
-    }
+    """Initialize session state variables"""
+    if 'logged_in' not in st.session_state:
+        st.session_state.logged_in = False
+    if 'username' not in st.session_state:
+        st.session_state.username = ''
+    if 'current_page' not in st.session_state:
+        st.session_state.current_page = 'login'
+    if 'uploaded_data' not in st.session_state:
+        st.session_state.uploaded_data = None
+    if 'data_quality_results' not in st.session_state:
+        st.session_state.data_quality_results = None
+    if 'mapping_results' not in st.session_state:
+        st.session_state.mapping_results = None
+    if 'dormancy_results' not in st.session_state:
+        st.session_state.dormancy_results = None
+    if 'compliance_results' not in st.session_state:
+        st.session_state.compliance_results = None
+    if 'processing_agent' not in st.session_state:
+        st.session_state.processing_agent = None
 
-    for key, default_value in session_defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = default_value
-
-initialize_session_state()
-
-# ===================== SCHEMA DEFINITIONS =====================
-
-def get_comprehensive_banking_schema():
-    """Get comprehensive CBUAE banking compliance schema (66 fields)"""
-    return {
-        # Customer Information (8 fields)
-        'customer_id': {
-            'description': 'Unique customer identifier',
-            'required': True,
-            'type': 'string',
-            'keywords': ['customer', 'client', 'id', 'identifier', 'cust', 'customer_id']
-        },
-        'customer_type': {
-            'description': 'Type of customer (Individual/Corporate)',
-            'required': True,
-            'type': 'string',
-            'keywords': ['customer_type', 'client_type', 'type', 'individual', 'corporate']
-        },
-        'full_name_en': {
-            'description': 'Customer full name in English',
-            'required': True,
-            'type': 'string',
-            'keywords': ['name', 'full_name', 'customer_name', 'client_name', 'english', 'full_name_en']
-        },
-        'full_name_ar': {
-            'description': 'Customer full name in Arabic',
-            'required': False,
-            'type': 'string',
-            'keywords': ['name_ar', 'full_name_ar', 'arabic', 'name_arabic', 'customer_name_ar']
-        },
-        'id_number': {
-            'description': 'Customer identification number',
-            'required': True,
-            'type': 'string',
-            'keywords': ['id_number', 'identification', 'id_no', 'emirates_id', 'passport']
-        },
-        'id_type': {
-            'description': 'Type of identification document',
-            'required': True,
-            'type': 'string',
-            'keywords': ['id_type', 'identification_type', 'doc_type', 'document_type']
-        },
-        'date_of_birth': {
-            'description': 'Customer date of birth',
-            'required': False,
-            'type': 'date',
-            'keywords': ['birth_date', 'dob', 'date_of_birth', 'birthday', 'birth']
-        },
-        'nationality': {
-            'description': 'Customer nationality',
-            'required': False,
-            'type': 'string',
-            'keywords': ['nationality', 'country', 'citizenship', 'nation', 'origin']
-        },
-
-        # Address Information (7 fields)
-        'address_line1': {
-            'description': 'Primary address line',
-            'required': False,
-            'type': 'string',
-            'keywords': ['address', 'address_line1', 'street', 'location', 'addr1']
-        },
-        'address_line2': {
-            'description': 'Secondary address line',
-            'required': False,
-            'type': 'string',
-            'keywords': ['address_line2', 'apartment', 'unit', 'building', 'addr2']
-        },
-        'city': {
-            'description': 'City of residence',
-            'required': False,
-            'type': 'string',
-            'keywords': ['city', 'town', 'municipality', 'location_city']
-        },
-        'emirate': {
-            'description': 'UAE Emirate',
-            'required': False,
-            'type': 'string',
-            'keywords': ['emirate', 'state', 'province', 'region', 'uae_emirate']
-        },
-        'country': {
-            'description': 'Country of residence',
-            'required': False,
-            'type': 'string',
-            'keywords': ['country', 'nation', 'residence_country', 'country_code']
-        },
-        'postal_code': {
-            'description': 'Postal or ZIP code',
-            'required': False,
-            'type': 'string',
-            'keywords': ['postal_code', 'zip', 'postcode', 'zip_code', 'postal']
-        },
-        'address_known': {
-            'description': 'Whether address is known/verified',
-            'required': False,
-            'type': 'string',
-            'keywords': ['address_known', 'verified', 'known', 'address_verified']
-        },
-
-        # Contact Information (6 fields)
-        'phone_primary': {
-            'description': 'Primary phone number',
-            'required': False,
-            'type': 'string',
-            'keywords': ['phone', 'mobile', 'telephone', 'contact', 'primary_phone', 'phone_primary']
-        },
-        'phone_secondary': {
-            'description': 'Secondary phone number',
-            'required': False,
-            'type': 'string',
-            'keywords': ['phone_secondary', 'secondary_phone', 'phone2', 'alternate_phone']
-        },
-        'email_primary': {
-            'description': 'Primary email address',
-            'required': False,
-            'type': 'string',
-            'keywords': ['email', 'email_address', 'contact_email', 'primary_email', 'email_primary']
-        },
-        'email_secondary': {
-            'description': 'Secondary email address',
-            'required': False,
-            'type': 'string',
-            'keywords': ['email_secondary', 'secondary_email', 'email2', 'alternate_email']
-        },
-        'last_contact_date': {
-            'description': 'Date of last contact attempt',
-            'required': False,
-            'type': 'date',
-            'keywords': ['last_contact_date', 'contact_date', 'last_contact', 'contact_attempt']
-        },
-        'last_contact_method': {
-            'description': 'Method of last contact attempt',
-            'required': False,
-            'type': 'string',
-            'keywords': ['contact_method', 'last_contact_method', 'method', 'contact_type']
-        },
-
-        # KYC and Risk (3 fields)
-        'kyc_status': {
-            'description': 'KYC compliance status',
-            'required': False,
-            'type': 'string',
-            'keywords': ['kyc', 'kyc_status', 'compliance', 'verification', 'know_your_customer']
-        },
-        'kyc_expiry_date': {
-            'description': 'KYC expiration date',
-            'required': False,
-            'type': 'date',
-            'keywords': ['kyc_expiry', 'kyc_expiry_date', 'expiry', 'kyc_expire']
-        },
-        'risk_rating': {
-            'description': 'Customer risk rating',
-            'required': False,
-            'type': 'string',
-            'keywords': ['risk', 'rating', 'risk_rating', 'risk_level', 'risk_score']
-        },
-
-        # Account Information (7 fields)
-        'account_id': {
-            'description': 'Unique account identifier',
-            'required': True,
-            'type': 'string',
-            'keywords': ['account_id', 'account_number', 'acc_id', 'account', 'number']
-        },
-        'account_type': {
-            'description': 'Type of account (Savings/Current/Fixed)',
-            'required': True,
-            'type': 'string',
-            'keywords': ['account_type', 'type', 'savings', 'current', 'fixed', 'deposit']
-        },
-        'account_subtype': {
-            'description': 'Account subtype classification',
-            'required': False,
-            'type': 'string',
-            'keywords': ['account_subtype', 'subtype', 'sub_type', 'classification']
-        },
-        'account_name': {
-            'description': 'Account name or title',
-            'required': False,
-            'type': 'string',
-            'keywords': ['account_name', 'name', 'title', 'account_title']
-        },
-        'currency': {
-            'description': 'Account currency',
-            'required': False,
-            'type': 'string',
-            'keywords': ['currency', 'curr', 'aed', 'usd', 'eur', 'currency_code']
-        },
-        'account_status': {
-            'description': 'Current status of account',
-            'required': True,
-            'type': 'string',
-            'keywords': ['status', 'account_status', 'active', 'inactive', 'closed']
-        },
-        'dormancy_status': {
-            'description': 'Dormancy classification status',
-            'required': True,
-            'type': 'string',
-            'keywords': ['dormancy', 'dormant', 'dormancy_status', 'classification']
-        },
-
-        # Account Dates (4 fields)
-        'opening_date': {
-            'description': 'Account opening date',
-            'required': False,
-            'type': 'date',
-            'keywords': ['opening_date', 'opened', 'start_date', 'creation_date', 'open_date']
-        },
-        'closing_date': {
-            'description': 'Account closing date',
-            'required': False,
-            'type': 'date',
-            'keywords': ['closing_date', 'closed', 'close_date', 'closure_date']
-        },
-        'last_transaction_date': {
-            'description': 'Date of last customer transaction',
-            'required': True,
-            'type': 'date',
-            'keywords': ['transaction_date', 'last_transaction', 'activity_date', 'last_activity']
-        },
-        'last_system_transaction_date': {
-            'description': 'Date of last system transaction',
-            'required': False,
-            'type': 'date',
-            'keywords': ['system_transaction', 'last_system_transaction', 'system_activity']
-        },
-
-        # Balance Information (5 fields)
-        'balance_current': {
-            'description': 'Current account balance',
-            'required': True,
-            'type': 'float',
-            'keywords': ['balance', 'current_balance', 'amount', 'balance_current']
-        },
-        'balance_available': {
-            'description': 'Available account balance',
-            'required': False,
-            'type': 'float',
-            'keywords': ['balance_available', 'available', 'available_balance', 'usable_balance']
-        },
-        'balance_minimum': {
-            'description': 'Minimum required balance',
-            'required': False,
-            'type': 'float',
-            'keywords': ['balance_minimum', 'minimum', 'min_balance', 'minimum_balance']
-        },
-        'interest_rate': {
-            'description': 'Account interest rate',
-            'required': False,
-            'type': 'float',
-            'keywords': ['interest_rate', 'rate', 'interest', 'apr', 'yield']
-        },
-        'interest_accrued': {
-            'description': 'Accrued interest amount',
-            'required': False,
-            'type': 'float',
-            'keywords': ['interest_accrued', 'accrued', 'earned_interest', 'interest_earned']
-        },
-
-        # Account Details (7 fields)
-        'is_joint_account': {
-            'description': 'Whether account is joint account',
-            'required': False,
-            'type': 'string',
-            'keywords': ['joint', 'is_joint', 'joint_account', 'shared']
-        },
-        'joint_account_holders': {
-            'description': 'Number of joint account holders',
-            'required': False,
-            'type': 'integer',
-            'keywords': ['joint_holders', 'holders', 'joint_account_holders', 'co_holders']
-        },
-        'has_outstanding_facilities': {
-            'description': 'Whether account has outstanding facilities',
-            'required': False,
-            'type': 'string',
-            'keywords': ['facilities', 'outstanding', 'has_facilities', 'credit_facilities']
-        },
-        'maturity_date': {
-            'description': 'Account maturity date',
-            'required': False,
-            'type': 'date',
-            'keywords': ['maturity', 'maturity_date', 'mature', 'expiry']
-        },
-        'auto_renewal': {
-            'description': 'Auto renewal setting',
-            'required': False,
-            'type': 'string',
-            'keywords': ['auto_renewal', 'renewal', 'auto_renew', 'automatic']
-        },
-        'last_statement_date': {
-            'description': 'Date of last statement',
-            'required': False,
-            'type': 'date',
-            'keywords': ['statement_date', 'last_statement', 'statement', 'last_stmt']
-        },
-        'statement_frequency': {
-            'description': 'Statement generation frequency',
-            'required': False,
-            'type': 'string',
-            'keywords': ['statement_frequency', 'frequency', 'stmt_freq', 'statement_cycle']
-        },
-
-        # Tracking and Processing (7 fields)
-        'tracking_id': {
-            'description': 'Unique tracking identifier',
-            'required': False,
-            'type': 'string',
-            'keywords': ['tracking_id', 'tracking', 'trace_id', 'reference']
-        },
-        'dormancy_trigger_date': {
-            'description': 'Date when dormancy was triggered',
-            'required': False,
-            'type': 'date',
-            'keywords': ['dormancy_trigger', 'trigger_date', 'dormant_since']
-        },
-        'dormancy_period_start': {
-            'description': 'Start of dormancy period',
-            'required': False,
-            'type': 'date',
-            'keywords': ['dormancy_start', 'period_start', 'dormant_from']
-        },
-        'dormancy_period_months': {
-            'description': 'Duration of dormancy in months',
-            'required': False,
-            'type': 'float',
-            'keywords': ['dormancy_months', 'period_months', 'months_dormant']
-        },
-        'dormancy_classification_date': {
-            'description': 'Date of dormancy classification',
-            'required': False,
-            'type': 'date',
-            'keywords': ['classification_date', 'dormancy_classification', 'classified_date']
-        },
-        'transfer_eligibility_date': {
-            'description': 'Date eligible for transfer',
-            'required': False,
-            'type': 'date',
-            'keywords': ['transfer_eligibility', 'eligible_date', 'transfer_date']
-        },
-        'current_stage': {
-            'description': 'Current processing stage',
-            'required': False,
-            'type': 'string',
-            'keywords': ['stage', 'current_stage', 'process_stage', 'workflow_stage']
-        },
-
-        # Contact Attempts (4 fields)
-        'contact_attempts_made': {
-            'description': 'Number of contact attempts made',
-            'required': False,
-            'type': 'integer',
-            'keywords': ['contact_attempts', 'attempts', 'contact_count', 'attempts_made']
-        },
-        'last_contact_attempt_date': {
-            'description': 'Date of last contact attempt',
-            'required': False,
-            'type': 'date',
-            'keywords': ['last_attempt', 'contact_attempt_date', 'attempt_date']
-        },
-        'waiting_period_start': {
-            'description': 'Start of waiting period',
-            'required': False,
-            'type': 'date',
-            'keywords': ['waiting_start', 'wait_period_start', 'waiting_period']
-        },
-        'waiting_period_end': {
-            'description': 'End of waiting period',
-            'required': False,
-            'type': 'date',
-            'keywords': ['waiting_end', 'wait_period_end', 'waiting_until']
-        },
-
-        # Transfer Information (5 fields)
-        'transferred_to_ledger_date': {
-            'description': 'Date transferred to ledger',
-            'required': False,
-            'type': 'date',
-            'keywords': ['ledger_transfer', 'transferred_ledger', 'ledger_date']
-        },
-        'transferred_to_cb_date': {
-            'description': 'Date transferred to Central Bank',
-            'required': False,
-            'type': 'date',
-            'keywords': ['cb_transfer', 'central_bank', 'cb_date', 'transferred_cb']
-        },
-        'cb_transfer_amount': {
-            'description': 'Amount transferred to Central Bank',
-            'required': False,
-            'type': 'float',
-            'keywords': ['cb_amount', 'transfer_amount', 'cb_transfer_amount']
-        },
-        'cb_transfer_reference': {
-            'description': 'Central Bank transfer reference',
-            'required': False,
-            'type': 'string',
-            'keywords': ['cb_reference', 'transfer_reference', 'cb_ref']
-        },
-        'exclusion_reason': {
-            'description': 'Reason for exclusion from process',
-            'required': False,
-            'type': 'string',
-            'keywords': ['exclusion', 'reason', 'exclusion_reason', 'excluded']
-        },
-
-        # System Fields (3 fields)
-        'created_date': {
-            'description': 'Record creation date',
-            'required': False,
-            'type': 'date',
-            'keywords': ['created', 'created_date', 'creation_date', 'date_created']
-        },
-        'updated_date': {
-            'description': 'Record last update date',
-            'required': False,
-            'type': 'date',
-            'keywords': ['updated', 'updated_date', 'modified', 'last_modified']
-        },
-        'updated_by': {
-            'description': 'User who last updated record',
-            'required': False,
-            'type': 'string',
-            'keywords': ['updated_by', 'modified_by', 'user', 'operator']
-        }
-    }
-
-def get_comprehensive_column_patterns():
-    """Get comprehensive column mapping patterns for all 66 fields"""
-    return {
-        # Customer Information
-        'customer_id': ['customer_id', 'cust_id', 'client_id', 'customer_number', 'clientid', 'customer'],
-        'customer_type': ['customer_type', 'client_type', 'type', 'individual', 'corporate', 'cust_type'],
-        'full_name_en': ['name', 'full_name', 'customer_name', 'client_name', 'fullname', 'full_name_en'],
-        'full_name_ar': ['full_name_ar', 'name_ar', 'arabic_name', 'customer_name_ar', 'name_arabic'],
-        'id_number': ['id_number', 'identification', 'id_no', 'emirates_id', 'passport', 'id'],
-        'id_type': ['id_type', 'identification_type', 'doc_type', 'document_type'],
-        'date_of_birth': ['birth_date', 'dob', 'date_of_birth', 'birthday', 'birth'],
-        'nationality': ['nationality', 'country', 'citizenship', 'nation', 'origin'],
-
-        # Address Information
-        'address_line1': ['address', 'address_line1', 'street', 'location', 'addr1'],
-        'address_line2': ['address_line2', 'apartment', 'unit', 'building', 'addr2'],
-        'city': ['city', 'town', 'municipality', 'location_city'],
-        'emirate': ['emirate', 'state', 'province', 'region', 'uae_emirate'],
-        'country': ['country', 'nation', 'residence_country', 'country_code'],
-        'postal_code': ['postal_code', 'zip', 'postcode', 'zip_code', 'postal'],
-        'address_known': ['address_known', 'verified', 'known', 'address_verified'],
-
-        # Contact Information
-        'phone_primary': ['phone', 'mobile', 'telephone', 'contact_number', 'phone_number', 'phone_primary'],
-        'phone_secondary': ['phone_secondary', 'secondary_phone', 'phone2', 'alternate_phone'],
-        'email_primary': ['email', 'email_address', 'contact_email', 'primary_email', 'email_primary'],
-        'email_secondary': ['email_secondary', 'secondary_email', 'email2', 'alternate_email'],
-        'last_contact_date': ['last_contact_date', 'contact_date', 'last_contact', 'contact_attempt'],
-        'last_contact_method': ['contact_method', 'last_contact_method', 'method', 'contact_type'],
-
-        # Account Information
-        'account_id': ['account_id', 'account_number', 'acc_id', 'account_no', 'accountid', 'account'],
-        'account_type': ['account_type', 'acc_type', 'type', 'product_type', 'accounttype'],
-        'account_subtype': ['account_subtype', 'subtype', 'sub_type', 'classification'],
-        'account_name': ['account_name', 'name', 'title', 'account_title'],
-        'currency': ['currency', 'curr', 'aed', 'usd', 'eur', 'currency_code'],
-        'account_status': ['status', 'account_status', 'acc_status', 'state'],
-        'dormancy_status': ['dormancy_status', 'dormant', 'dormancy', 'classification'],
-
-        # Balance and Financial
-        'balance_current': ['balance', 'current_balance', 'amount', 'bal', 'currentbalance', 'balance_current'],
-        'balance_available': ['balance_available', 'available', 'available_balance', 'usable_balance'],
-        'balance_minimum': ['balance_minimum', 'minimum', 'min_balance', 'minimum_balance'],
-        'interest_rate': ['interest_rate', 'rate', 'interest', 'apr', 'yield'],
-        'interest_accrued': ['interest_accrued', 'accrued', 'earned_interest', 'interest_earned'],
-
-        # Dates
-        'opening_date': ['opening_date', 'opened', 'start_date', 'creation_date', 'open_date'],
-        'closing_date': ['closing_date', 'closed', 'close_date', 'closure_date'],
-        'last_transaction_date': ['last_transaction_date', 'transaction_date', 'last_activity', 'activity_date'],
-        'last_system_transaction_date': ['system_transaction', 'last_system_transaction', 'system_activity'],
-
-        # KYC and Risk
-        'kyc_status': ['kyc', 'kyc_status', 'compliance', 'verification', 'know_your_customer'],
-        'kyc_expiry_date': ['kyc_expiry', 'kyc_expiry_date', 'expiry', 'kyc_expire'],
-        'risk_rating': ['risk', 'rating', 'risk_rating', 'risk_level', 'risk_score'],
-
-        # Dormancy Processing
-        'dormancy_trigger_date': ['dormancy_trigger', 'trigger_date', 'dormant_since'],
-        'dormancy_period_start': ['dormancy_start', 'period_start', 'dormant_from'],
-        'dormancy_period_months': ['dormancy_months', 'period_months', 'months_dormant'],
-        'dormancy_classification_date': ['classification_date', 'dormancy_classification', 'classified_date'],
-        'transfer_eligibility_date': ['transfer_eligibility', 'eligible_date', 'transfer_date'],
-        'current_stage': ['stage', 'current_stage', 'process_stage', 'workflow_stage'],
-
-        # Contact Attempts
-        'contact_attempts_made': ['contact_attempts', 'attempts', 'contact_count', 'attempts_made'],
-        'last_contact_attempt_date': ['last_attempt', 'contact_attempt_date', 'attempt_date'],
-        'waiting_period_start': ['waiting_start', 'wait_period_start', 'waiting_period'],
-        'waiting_period_end': ['waiting_end', 'wait_period_end', 'waiting_until'],
-
-        # Transfers
-        'transferred_to_ledger_date': ['ledger_transfer', 'transferred_ledger', 'ledger_date'],
-        'transferred_to_cb_date': ['cb_transfer', 'central_bank', 'cb_date', 'transferred_cb'],
-        'cb_transfer_amount': ['cb_amount', 'transfer_amount', 'cb_transfer_amount'],
-        'cb_transfer_reference': ['cb_reference', 'transfer_reference', 'cb_ref'],
-        'exclusion_reason': ['exclusion', 'reason', 'exclusion_reason', 'excluded']
-    }
-
-def get_schema_field_info(field_name):
-    """Get detailed information about a specific schema field"""
-    schema = get_comprehensive_banking_schema()
-    return schema.get(field_name, {
-        'description': 'Unknown field',
-        'required': False,
-        'type': 'string',
-        'keywords': []
-    })
-
-def get_required_fields():
-    """Get list of required fields from the comprehensive schema"""
-    schema = get_comprehensive_banking_schema()
-    return [field for field, info in schema.items() if info.get('required', False)]
-
-def get_optional_fields():
-    """Get list of optional fields from the comprehensive schema"""
-    schema = get_comprehensive_banking_schema()
-    return [field for field, info in schema.items() if not info.get('required', False)]
-
-def get_fields_by_category():
-    """Get fields organized by category"""
-    return {
-        'Customer Information': [
-            'customer_id', 'customer_type', 'full_name_en', 'full_name_ar',
-            'id_number', 'id_type', 'date_of_birth', 'nationality'
-        ],
-        'Address Information': [
-            'address_line1', 'address_line2', 'city', 'emirate', 'country',
-            'postal_code', 'address_known'
-        ],
-        'Contact Information': [
-            'phone_primary', 'phone_secondary', 'email_primary', 'email_secondary',
-            'last_contact_date', 'last_contact_method'
-        ],
-        'KYC and Risk': [
-            'kyc_status', 'kyc_expiry_date', 'risk_rating'
-        ],
-        'Account Information': [
-            'account_id', 'account_type', 'account_subtype', 'account_name',
-            'currency', 'account_status', 'dormancy_status'
-        ],
-        'Account Dates': [
-            'opening_date', 'closing_date', 'last_transaction_date',
-            'last_system_transaction_date'
-        ],
-        'Balance Information': [
-            'balance_current', 'balance_available', 'balance_minimum',
-            'interest_rate', 'interest_accrued'
-        ],
-        'Account Details': [
-            'is_joint_account', 'joint_account_holders', 'has_outstanding_facilities',
-            'maturity_date', 'auto_renewal', 'last_statement_date', 'statement_frequency'
-        ],
-        'Tracking and Processing': [
-            'tracking_id', 'dormancy_trigger_date', 'dormancy_period_start',
-            'dormancy_period_months', 'dormancy_classification_date',
-            'transfer_eligibility_date', 'current_stage'
-        ],
-        'Contact Attempts': [
-            'contact_attempts_made', 'last_contact_attempt_date',
-            'waiting_period_start', 'waiting_period_end'
-        ],
-        'Transfer Information': [
-            'transferred_to_ledger_date', 'transferred_to_cb_date',
-            'cb_transfer_amount', 'cb_transfer_reference', 'exclusion_reason'
-        ],
-        'System Fields': [
-            'created_date', 'updated_date', 'updated_by'
-        ]
-    }
-
-# ===================== UTILITY FUNCTIONS =====================
-
-def get_or_create_event_loop():
-    """Get or create event loop for async operations"""
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_closed():
-            raise RuntimeError("Event loop is closed")
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    return loop
-
-def validate_credentials(username: str, password: str) -> bool:
-    """Validate user credentials"""
-    demo_users = {
-        "admin": "admin123",
-        "compliance_officer": "compliance123",
-        "analyst": "analyst123",
-        "demo_user": "demo"
-    }
-    return username in demo_users and demo_users[username] == password
-
-def safe_getattr(obj, attr, default=None):
-    """Safely get attribute from object, handling both dict and dataclass"""
-    if isinstance(obj, dict):
-        return obj.get(attr, default)
-    else:
-        return getattr(obj, attr, default)
-
-def create_download_link(data, filename: str, file_format: str = 'csv'):
-    """Create download link for data"""
-    if file_format.lower() == 'csv':
-        if isinstance(data, pd.DataFrame):
-            csv = data.to_csv(index=False)
-            return st.download_button(
-                label=f"📥 Download {filename}.csv",
-                data=csv,
-                file_name=f"{filename}.csv",
-                mime="text/csv"
-            )
-        else:
-            return st.download_button(
-                label=f"📥 Download {filename}.txt",
-                data=str(data),
-                file_name=f"{filename}.txt",
-                mime="text/plain"
-            )
-    elif file_format.lower() == 'json':
-        json_str = json.dumps(data, indent=2, default=str)
-        return st.download_button(
-            label=f"📥 Download {filename}.json",
-            data=json_str,
-            file_name=f"{filename}.json",
-            mime="application/json"
-        )
-
-# ===================== LOGIN SYSTEM =====================
+# ===================== AUTHENTICATION =====================
 
 def show_login_page():
     """Display login interface"""
-    st.markdown('<div class="main-header">🏦 CBUAE Banking Compliance System</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-header">🏛️ CBUAE Banking Compliance System</div>', unsafe_allow_html=True)
 
-    st.markdown('<div class="login-container">', unsafe_allow_html=True)
+    st.markdown("### 🔐 Authentication Required")
+    st.markdown("---")
 
-    with st.container():
-        st.markdown("### 🔐 System Login")
+    col1, col2, col3 = st.columns([1, 2, 1])
 
-        col1, col2 = st.columns(2)
+    with col2:
+        with st.form("login_form"):
+            st.markdown("#### Login to Access System")
+            username = st.text_input("👤 Username", placeholder="Enter your username")
+            password = st.text_input("🔒 Password", type="password", placeholder="Enter your password")
 
-        with col1:
-            username = st.text_input("👤 Username", placeholder="Enter username")
-            password = st.text_input("🔑 Password", type="password", placeholder="Enter password")
+            col_a, col_b = st.columns(2)
+            with col_a:
+                if st.form_submit_button("🚀 Login", use_container_width=True):
+                    if authenticate_user(username, password):
+                        st.session_state.logged_in = True
+                        st.session_state.username = username
+                        st.session_state.current_page = 'main'
+                        st.success("✅ Login successful!")
+                        st.rerun()
+                    else:
+                        st.error("❌ Invalid credentials")
 
-            if st.button("🚀 Login", use_container_width=True):
-                if validate_credentials(username, password):
+            with col_b:
+                if st.form_submit_button("👤 Demo Login", use_container_width=True):
                     st.session_state.logged_in = True
-                    st.session_state.username = username
+                    st.session_state.username = "demo_user"
                     st.session_state.current_page = 'main'
-                    st.success("✅ Login successful!")
+                    st.success("✅ Demo login successful!")
                     st.rerun()
-                else:
-                    st.error("❌ Invalid credentials")
-
-        with col2:
-            if st.button("👤 Demo Login", use_container_width=True):
-                st.session_state.logged_in = True
-                st.session_state.username = "demo_user"
-                st.session_state.current_page = 'main'
-                st.success("✅ Demo login successful!")
-                st.rerun()
-
-    st.markdown('</div>', unsafe_allow_html=True)
 
     # System capabilities overview
     st.markdown("---")
@@ -911,24 +287,32 @@ def show_login_page():
     with col2:
         st.markdown("""
         **💤 Dormancy Analysis:**
-        - 11 specialized dormancy agents
-        - 5 Primary Detection agents (Art. 2.x)
-        - 3 Process & Transfer agents (Art. 3, 5, 8)
-        - 2 Specialized Analysis agents
-        - 1 Master Orchestrator
-        - Complete CBUAE Article compliance
+        - 10 specialized dormancy agents
+        - Complete CBUAE Article compliance (Art. 2-8)
+        - Individual CSV downloads per agent
+        - Risk assessment and prioritization
+        - Central Bank transfer processing
         """)
 
     with col3:
         st.markdown("""
         **⚖️ Compliance Verification:**
         - 17 compliance verification agents
-        - 6 functional categories
-        - Multi-article regulation checking (Art. 2-8)
+        - Multi-article regulation checking
         - Automated violation detection
         - Comprehensive audit trails
-        - Central Bank transfer processing
+        - Action-oriented recommendations
         """)
+
+def authenticate_user(username: str, password: str) -> bool:
+    """Simple authentication (replace with actual authentication system)"""
+    # Demo credentials
+    valid_credentials = {
+        "admin": "admin123",
+        "compliance": "compliance123",
+        "demo": "demo123"
+    }
+    return username in valid_credentials and valid_credentials[username] == password
 
 # ===================== DATA PROCESSING SECTION =====================
 
@@ -936,1952 +320,765 @@ def show_data_processing_section():
     """Display comprehensive data processing interface"""
     st.markdown('<div class="section-header">📤 Data Processing & Upload</div>', unsafe_allow_html=True)
 
-    if not AGENTS_STATUS['unified_data_processing']:
-        st.error("❌ Unified Data Processing Agent not available")
+    if not DATA_PROCESSING_AVAILABLE:
+        st.error("❌ Data Processing Agent not available")
         st.info("💡 Please ensure agents.Data_Process module is available and properly configured.")
         return
 
-    # Data upload methods
-    st.markdown("### 📂 Data Upload Methods")
+    # Initialize processing agent
+    if st.session_state.processing_agent is None:
+        st.session_state.processing_agent = UnifiedDataProcessingAgent()
+
+    # Data Upload Section
+    st.markdown("#### 📁 Data Upload Options")
 
     upload_method = st.selectbox(
-        "🔄 Select Upload Method:",
-        ["file", "drive", "datalake", "hdfs"],
-        format_func=lambda x: {
-            "file": "📄 File Upload (CSV, Excel, JSON)",
-            "drive": "☁️ Google Drive",
-            "datalake": "🌊 Azure Data Lake",
-            "hdfs": "🐘 Hadoop HDFS"
-        }[x]
+        "Select Upload Method:",
+        ["File Upload", "Google Drive", "Data Lake", "HDFS"],
+        help="Choose your preferred data source method"
     )
 
-    st.session_state.upload_method = upload_method
+    uploaded_data = None
 
-    # File upload interface
-    if upload_method == "file":
+    if upload_method == "File Upload":
         uploaded_file = st.file_uploader(
-            "📤 Choose a file",
+            "Choose file (CSV, Excel, JSON, Parquet)",
             type=['csv', 'xlsx', 'xls', 'json', 'parquet'],
-            help="Supported formats: CSV, Excel, JSON, Parquet"
+            help="Upload your banking compliance dataset"
         )
 
         if uploaded_file is not None:
-            if st.button("🚀 Process File", type="primary"):
-                process_uploaded_file(uploaded_file)
+            with st.spinner("🔄 Processing uploaded file..."):
+                try:
+                    # Process file based on type
+                    if uploaded_file.name.endswith('.csv'):
+                        uploaded_data = pd.read_csv(uploaded_file)
+                    elif uploaded_file.name.endswith(('.xlsx', '.xls')):
+                        uploaded_data = pd.read_excel(uploaded_file)
+                    elif uploaded_file.name.endswith('.json'):
+                        uploaded_data = pd.read_json(uploaded_file)
+                    elif uploaded_file.name.endswith('.parquet'):
+                        uploaded_data = pd.read_parquet(uploaded_file)
 
-    elif upload_method == "drive":
-        drive_path = st.text_input("📁 Google Drive File Path/ID", placeholder="Enter file path or Google Drive file ID")
-        if st.button("🚀 Load from Drive", type="primary") and drive_path:
-            process_drive_file(drive_path)
+                    st.session_state.uploaded_data = uploaded_data
+                    st.success(f"✅ File uploaded successfully! Shape: {uploaded_data.shape}")
 
-    elif upload_method == "datalake":
-        datalake_path = st.text_input("🌊 Azure Data Lake Path", placeholder="Enter Azure Data Lake file path")
-        if st.button("🚀 Load from Data Lake", type="primary") and datalake_path:
-            process_datalake_file(datalake_path)
+                except Exception as e:
+                    st.error(f"❌ Error processing file: {str(e)}")
 
-    elif upload_method == "hdfs":
-        hdfs_path = st.text_input("🐘 HDFS Path", placeholder="Enter HDFS file path")
-        if st.button("🚀 Load from HDFS", type="primary") and hdfs_path:
-            process_hdfs_file(hdfs_path)
+    elif upload_method == "Google Drive":
+        st.info("🔗 Google Drive integration - Enter file URL or ID")
+        drive_url = st.text_input("Google Drive File URL/ID:")
+        if drive_url and st.button("📥 Download from Drive"):
+            st.warning("🚧 Google Drive integration requires authentication setup")
 
-    # Display upload results
+    elif upload_method == "Data Lake":
+        st.info("☁️ Data Lake connection - Configure your data source")
+        col1, col2 = st.columns(2)
+        with col1:
+            lake_endpoint = st.text_input("Data Lake Endpoint:")
+        with col2:
+            lake_path = st.text_input("File Path:")
+        if lake_endpoint and lake_path and st.button("📥 Connect to Data Lake"):
+            st.warning("🚧 Data Lake integration requires proper credentials")
+
+    elif upload_method == "HDFS":
+        st.info("🗂️ HDFS connection - Configure Hadoop cluster")
+        col1, col2 = st.columns(2)
+        with col1:
+            hdfs_host = st.text_input("HDFS Host:")
+        with col2:
+            hdfs_path = st.text_input("HDFS Path:")
+        if hdfs_host and hdfs_path and st.button("📥 Connect to HDFS"):
+            st.warning("🚧 HDFS integration requires cluster access")
+
+    # Data Quality Analysis
     if st.session_state.uploaded_data is not None:
-        display_upload_results()
+        st.markdown("---")
+        st.markdown("#### 🔍 Data Quality Analysis")
 
-    # Data quality analysis section
-    if st.session_state.uploaded_data is not None:
-        show_data_quality_section()
+        if st.button("🔬 Analyze Data Quality", use_container_width=True):
+            with st.spinner("🔄 Analyzing data quality..."):
+                try:
+                    analyzer = DataQualityAnalyzer()
+                    quality_result = analyzer.analyze_data_quality(st.session_state.uploaded_data)
+                    st.session_state.data_quality_results = quality_result
 
-    # Data mapping section
-    if st.session_state.uploaded_data is not None:
-        show_data_mapping_section()
+                    # Display quality metrics
+                    col1, col2, col3, col4 = st.columns(4)
 
-def process_uploaded_file(uploaded_file):
-    """Process uploaded file using unified data processing agent"""
-    try:
-        with st.spinner("📤 Processing uploaded file..."):
-            # Create temporary file
-            with tempfile.NamedTemporaryFile(delete=False, suffix=f".{uploaded_file.name.split('.')[-1]}") as tmp_file:
-                tmp_file.write(uploaded_file.getvalue())
-                tmp_file_path = tmp_file.name
+                    with col1:
+                        st.metric("Overall Score", f"{quality_result.overall_score:.1%}")
+                    with col2:
+                        st.metric("Quality Level", quality_result.quality_level.title())
+                    with col3:
+                        st.metric("Missing %", f"{quality_result.missing_percentage:.1%}")
+                    with col4:
+                        st.metric("Duplicates", quality_result.duplicate_records)
 
-            # Process with unified agent
-            loop = get_or_create_event_loop()
-            agent = create_unified_data_processing_agent()
+                    # Quality recommendations
+                    if quality_result.recommendations:
+                        st.markdown("**📋 Recommendations:**")
+                        for rec in quality_result.recommendations:
+                            st.write(f"• {rec}")
 
-            session_id = secrets.token_hex(8)
-            st.session_state.agent_session_id = session_id
+                except Exception as e:
+                    st.error(f"❌ Quality analysis failed: {str(e)}")
 
-            result = loop.run_until_complete(
-                agent.process_data_comprehensive(
-                    upload_method="file",
-                    source=tmp_file_path,
-                    user_id=st.session_state.username,
-                    session_id=session_id,
-                    run_quality_analysis=True,
-                    run_column_mapping=False  # We'll do mapping separately
+        # Data Mapping Section
+        st.markdown("---")
+        st.markdown("#### 🗺️ Data Mapping")
+
+        # Enable LLM toggle
+        enable_llm = st.toggle(
+            "🤖 Enable LLM Auto-Mapping",
+            help="Use LLM to automatically map columns based on semantic similarity and reasoning"
+        )
+
+        col1, col2 = st.columns([3, 1])
+
+        with col1:
+            if st.button("🎯 Generate Column Mapping", use_container_width=True):
+                with st.spinner("🔄 Generating column mapping..."):
+                    try:
+                        mapping_result = generate_column_mapping(
+                            st.session_state.uploaded_data,
+                            enable_llm=enable_llm
+                        )
+                        st.session_state.mapping_results = mapping_result
+
+                        if mapping_result['success']:
+                            st.success(f"✅ Mapping generated! Auto-mapped: {mapping_result['auto_mapped']}/{len(st.session_state.uploaded_data.columns)} columns")
+                        else:
+                            st.error(f"❌ Mapping failed: {mapping_result.get('error', 'Unknown error')}")
+
+                    except Exception as e:
+                        st.error(f"❌ Mapping generation failed: {str(e)}")
+
+        with col2:
+            if st.session_state.mapping_results:
+                mapping_df = pd.DataFrame(st.session_state.mapping_results['mappings'])
+                csv = mapping_df.to_csv(index=False)
+                st.download_button(
+                    "📄 Download Mapping",
+                    csv,
+                    f"column_mapping_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    "text/csv",
+                    use_container_width=True
                 )
-            )
 
-            # Handle both dict and nested structure formats
-            upload_result = result.get('upload_result', {})
+        # Display mapping results
+        if st.session_state.mapping_results and st.session_state.mapping_results['success']:
+            display_mapping_interface()
 
-            if isinstance(upload_result, dict):
-                success = upload_result.get('success', False)
-                data = upload_result.get('data', None)
-                error = upload_result.get('error', 'Unknown error')
-            else:
-                success = upload_result.success
-                data = upload_result.data
-                error = upload_result.error
-
-            if success and data is not None:
-                st.session_state.uploaded_data = data
-                st.session_state.quality_results = result.get('quality_result')
-                st.success("✅ File uploaded and processed successfully!")
-            else:
-                st.error(f"❌ Upload failed: {error}")
-
-    except Exception as e:
-        st.error(f"❌ Error processing file: {str(e)}")
-        logger.error(f"File processing error: {str(e)}")
-
-def process_drive_file(drive_path):
-    """Process file from Google Drive"""
+def generate_column_mapping(data: pd.DataFrame, enable_llm: bool = False) -> Dict:
+    """Generate column mapping with optional LLM enhancement"""
     try:
-        with st.spinner("☁️ Loading from Google Drive..."):
-            # Placeholder for Google Drive integration
-            st.info("🚧 Google Drive integration coming soon!")
-    except Exception as e:
-        st.error(f"❌ Error loading from Drive: {str(e)}")
+        source_columns = list(data.columns)
+        target_fields = list(BANKING_SCHEMA.keys())
 
-def process_datalake_file(datalake_path):
-    """Process file from Azure Data Lake"""
-    try:
-        with st.spinner("🌊 Loading from Azure Data Lake..."):
-            # Placeholder for Azure Data Lake integration
-            st.info("🚧 Azure Data Lake integration coming soon!")
-    except Exception as e:
-        st.error(f"❌ Error loading from Data Lake: {str(e)}")
+        mappings = []
+        auto_mapped = 0
 
-def process_hdfs_file(hdfs_path):
-    """Process file from HDFS"""
-    try:
-        with st.spinner("🐘 Loading from HDFS..."):
-            # Placeholder for HDFS integration
-            st.info("🚧 HDFS integration coming soon!")
-    except Exception as e:
-        st.error(f"❌ Error loading from HDFS: {str(e)}")
+        for source_col in source_columns:
+            best_match = None
+            best_score = 0.0
 
-def display_upload_results():
-    """Display upload results and data preview"""
-    st.markdown("### 📊 Upload Results")
+            # Simple string similarity matching (replace with BGE embeddings in production)
+            for target_field in target_fields:
+                # Basic similarity calculation
+                source_lower = source_col.lower().replace('_', ' ').replace('-', ' ')
+                target_lower = target_field.lower().replace('_', ' ').replace('-', ' ')
 
-    data = st.session_state.uploaded_data
+                # Check for exact matches or contains
+                if source_lower == target_lower:
+                    score = 1.0
+                elif source_lower in target_lower or target_lower in source_lower:
+                    score = 0.8
+                elif any(word in target_lower.split() for word in source_lower.split()):
+                    score = 0.6
+                else:
+                    score = 0.3
 
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("📊 Total Records", f"{len(data):,}")
-    with col2:
-        st.metric("📋 Columns", len(data.columns))
-    with col3:
-        st.metric("💾 Memory Usage", f"{data.memory_usage(deep=True).sum() / 1024 / 1024:.1f} MB")
-    with col4:
-        st.metric("📅 Upload Time", datetime.now().strftime("%H:%M:%S"))
+                if score > best_score:
+                    best_score = score
+                    best_match = target_field
 
-    # Data preview
-    st.markdown("#### 🔍 Data Preview")
-    st.dataframe(data.head(10), use_container_width=True)
+            confidence = "high" if best_score >= 0.8 else "medium" if best_score >= 0.6 else "low"
 
-    # Column information
-    with st.expander("📋 Column Information"):
-        col_info = pd.DataFrame({
-            'Column': data.columns,
-            'Type': data.dtypes,
-            'Non-Null Count': data.count(),
-            'Null Count': data.isnull().sum(),
-            'Null %': (data.isnull().sum() / len(data) * 100).round(2)
-        })
-        st.dataframe(col_info, use_container_width=True)
+            if best_score >= 0.6:
+                auto_mapped += 1
 
-def show_data_quality_section():
-    """Display data quality analysis section"""
-    st.markdown("### 🔍 Data Quality Analysis")
+            mappings.append({
+                'source_column': source_col,
+                'target_field': best_match,
+                'confidence': confidence,
+                'similarity_score': best_score,
+                'required': BANKING_SCHEMA.get(best_match, {}).get('required', False),
+                'description': BANKING_SCHEMA.get(best_match, {}).get('description', '')
+            })
 
-    if st.session_state.quality_results:
-        display_quality_results()
-    else:
-        if st.button("🔬 Run Quality Analysis", type="primary"):
-            run_quality_analysis()
-
-def run_quality_analysis():
-    """Run comprehensive data quality analysis"""
-    try:
-        with st.spinner("🔬 Analyzing data quality..."):
-            data = st.session_state.uploaded_data
-            agent = create_unified_data_processing_agent()
-
-            loop = get_or_create_event_loop()
-            result = loop.run_until_complete(
-                agent.analyze_data_quality(
-                    data,
-                    st.session_state.username,
-                    st.session_state.agent_session_id
-                )
-            )
-
-            st.session_state.quality_results = result
-            st.success("✅ Quality analysis completed!")
+        return {
+            'success': True,
+            'mappings': mappings,
+            'auto_mapped': auto_mapped,
+            'total_columns': len(source_columns),
+            'llm_enhanced': enable_llm
+        }
 
     except Exception as e:
-        st.error(f"❌ Quality analysis failed: {str(e)}")
+        return {
+            'success': False,
+            'error': str(e),
+            'mappings': [],
+            'auto_mapped': 0
+        }
 
-def display_quality_results():
-    """Display quality analysis results"""
-    results = st.session_state.quality_results
-
-    # Handle both dict and dataclass formats safely
-    success = safe_getattr(results, 'success', False)
-    overall_score = safe_getattr(results, 'overall_score', 0)
-    missing_percentage = safe_getattr(results, 'missing_percentage', 0)
-    duplicate_records = safe_getattr(results, 'duplicate_records', 0)
-    quality_level = safe_getattr(results, 'quality_level', 'unknown')
-    metrics = safe_getattr(results, 'metrics', {})
-    recommendations = safe_getattr(results, 'recommendations', [])
-    error = safe_getattr(results, 'error', 'Unknown error')
-
-    if not success:
-        st.error(f"❌ Quality analysis failed: {error}")
-        return
-
-    # Quality metrics
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("🎯 Overall Score", f"{overall_score:.1f}%")
-    with col2:
-        st.metric("📉 Missing Data", f"{missing_percentage:.1f}%")
-    with col3:
-        st.metric("🔄 Duplicates", f"{duplicate_records:,}")
-    with col4:
-        quality_level_display = str(quality_level).upper()
-        st.metric("📊 Quality Level", quality_level_display)
-
-    # Quality breakdown
-    if metrics:
-        st.markdown("#### 📊 Quality Metrics Breakdown")
-        metrics_df = pd.DataFrame([
-            {'Metric': k.replace('_', ' ').title(), 'Score': f"{v:.1f}%"}
-            for k, v in metrics.items()
-        ])
-        st.dataframe(metrics_df, use_container_width=True)
-
-    # Recommendations
-    if recommendations:
-        st.markdown("#### 💡 Quality Recommendations")
-        for rec in recommendations:
-            st.write(f"• {rec}")
-
-def show_mapping_validation():
-    """Show mapping validation and completeness analysis"""
+def display_mapping_interface():
+    """Display interactive mapping interface"""
     if not st.session_state.mapping_results:
         return
 
-    st.markdown("#### ✅ Mapping Validation")
+    st.markdown("#### 🎯 Column Mapping Results")
 
-    # Get current mappings
-    mappings = safe_getattr(st.session_state.mapping_results, 'mappings', {})
+    # Convert to DataFrame for display
+    mapping_df = pd.DataFrame(st.session_state.mapping_results['mappings'])
 
-    if not mappings:
-        st.warning("⚠️ No column mappings found. Please run column mapping first.")
-        return
-
-    # Get required and optional fields
-    required_fields = get_required_fields()
-    optional_fields = get_optional_fields()
-
-    # Check which required fields are mapped
-    mapped_values = set(mappings.values())
-    mapped_required = [field for field in required_fields if field in mapped_values]
-    missing_required = [field for field in required_fields if field not in mapped_values]
-    mapped_optional = [field for field in optional_fields if field in mapped_values]
-
-    # Display validation metrics
-    col1, col2, col3, col4 = st.columns(4)
-
+    # Filter options
+    col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric(
-            "🔴 Required Fields",
-            f"{len(mapped_required)}/{len(required_fields)}",
-            delta=f"{len(missing_required)} missing" if missing_required else "Complete!"
-        )
-
+        filter_confidence = st.selectbox("Filter by Confidence:", ["All", "High", "Medium", "Low"])
     with col2:
-        st.metric(
-            "🟡 Optional Fields",
-            f"{len(mapped_optional)}/{len(optional_fields)}",
-            delta=f"{(len(mapped_optional)/len(optional_fields)*100):.0f}% coverage"
-        )
-
+        filter_required = st.selectbox("Filter by Required:", ["All", "Required Only", "Optional Only"])
     with col3:
-        total_mapped = len(mapped_values)
-        total_fields = len(required_fields) + len(optional_fields)
-        st.metric(
-            "📊 Total Coverage",
-            f"{total_mapped}/{total_fields}",
-            delta=f"{(total_mapped/total_fields*100):.1f}%"
-        )
+        show_unmapped = st.checkbox("Show Unmapped Only")
 
-    with col4:
-        completeness_score = (len(mapped_required) / len(required_fields)) * 100 if required_fields else 100
-        st.metric(
-            "✅ Completeness",
-            f"{completeness_score:.0f}%",
-            delta="Ready for analysis" if completeness_score >= 80 else "Needs improvement"
-        )
+    # Apply filters
+    filtered_df = mapping_df.copy()
 
-    # Show detailed validation
-    if missing_required:
-        st.error(f"❌ **Missing Required Fields ({len(missing_required)}):** {', '.join(missing_required)}")
-        st.info("💡 **Tip:** These fields are essential for CBUAE compliance analysis. Please map them before proceeding to dormancy analysis.")
-    else:
-        st.success("✅ **All required fields are mapped!** You can proceed to dormancy analysis.")
+    if filter_confidence != "All":
+        filtered_df = filtered_df[filtered_df['confidence'] == filter_confidence.lower()]
 
-    # Show mapping by category
-    with st.expander("📋 Mapping Status by Category", expanded=False):
-        categories = get_fields_by_category()
+    if filter_required == "Required Only":
+        filtered_df = filtered_df[filtered_df['required'] == True]
+    elif filter_required == "Optional Only":
+        filtered_df = filtered_df[filtered_df['required'] == False]
 
-        for category_name, category_fields in categories.items():
-            mapped_in_category = [field for field in category_fields if field in mapped_values]
-            coverage = len(mapped_in_category) / len(category_fields) * 100 if category_fields else 0
+    if show_unmapped:
+        filtered_df = filtered_df[filtered_df['similarity_score'] < 0.6]
 
-            if coverage >= 80:
-                status_icon = "✅"
-                status_color = "success"
-            elif coverage >= 50:
-                status_icon = "🟡"
-                status_color = "warning"
-            else:
-                status_icon = "❌"
-                status_color = "error"
+    # Display mapping table with edit capability
+    st.markdown("**🗂️ Mapping Table** (Click to edit)")
 
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                st.markdown(f"**{status_icon} {category_name}**")
-                if mapped_in_category:
-                    st.caption(f"Mapped: {', '.join(mapped_in_category)}")
-            with col2:
-                st.markdown(f"**{len(mapped_in_category)}/{len(category_fields)}** ({coverage:.0f}%)")
-
-def show_data_flow_status():
-    """Show current data flow status and readiness for next steps"""
-    st.markdown("#### 🔄 Data Flow Status")
-
-    # Check current state
-    has_uploaded = st.session_state.uploaded_data is not None
-    has_quality = st.session_state.quality_results is not None
-    has_mapping = st.session_state.mapping_results is not None
-    has_processed = st.session_state.processed_data is not None
-
-    # Processing steps with status
-    steps = [
-        {
-            'name': '📤 Data Upload',
-            'status': has_uploaded,
-            'description': f'{len(st.session_state.uploaded_data):,} records uploaded' if has_uploaded else 'No data uploaded'
+    edited_df = st.data_editor(
+        filtered_df,
+        column_config={
+            "source_column": st.column_config.TextColumn("Source Column", disabled=True),
+            "target_field": st.column_config.SelectboxColumn(
+                "Target Field",
+                options=list(BANKING_SCHEMA.keys()),
+                required=True
+            ),
+            "confidence": st.column_config.TextColumn("Confidence", disabled=True),
+            "similarity_score": st.column_config.NumberColumn("Score", disabled=True, format="%.2f"),
+            "required": st.column_config.CheckboxColumn("Required", disabled=True),
+            "description": st.column_config.TextColumn("Description", disabled=True)
         },
-        {
-            'name': '🔍 Quality Analysis',
-            'status': has_quality,
-            'description': f'{safe_getattr(st.session_state.quality_results, "overall_score", 0):.1f}% quality score' if has_quality else 'Quality analysis pending'
-        },
-        {
-            'name': '🗺️ Column Mapping',
-            'status': has_mapping and safe_getattr(st.session_state.mapping_results, 'success', False),
-            'description': f'{len(safe_getattr(st.session_state.mapping_results, "mappings", {})):,} columns mapped' if has_mapping else 'Column mapping pending'
-        },
-        {
-            'name': '⚙️ Data Processing',
-            'status': has_processed,
-            'description': f'{len(st.session_state.processed_data):,} records processed' if has_processed else 'Data processing pending'
-        }
-    ]
+        hide_index=True,
+        use_container_width=True
+    )
 
-    # Display status flow
-    cols = st.columns(len(steps))
-
-    for i, (col, step) in enumerate(zip(cols, steps)):
-        with col:
-            if step['status']:
-                st.success(f"✅ {step['name']}")
-                st.caption(step['description'])
-            else:
-                st.error(f"❌ {step['name']}")
-                st.caption(step['description'])
-
-    # Overall readiness
-    all_ready = all(step['status'] for step in steps)
-
-    if all_ready:
-        st.success("🎉 **Data processing complete!** Your data is ready for dormancy analysis.")
-
-        # Show what will be passed to dormancy analysis
-        if st.session_state.processed_data is not None:
-            processed_data = st.session_state.processed_data
-            required_fields = get_required_fields()
-            available_required = [field for field in required_fields if field in processed_data.columns]
-
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("📊 Processed Records", f"{len(processed_data):,}")
-            with col2:
-                st.metric("🗂️ Total Columns", f"{len(processed_data.columns)}")
-            with col3:
-                st.metric("🔴 Required Fields", f"{len(available_required)}/{len(required_fields)}")
-
-        if st.button("🚀 Proceed to Dormancy Analysis", type="primary"):
-            st.session_state.current_page = 'dormancy_analysis'
-            st.rerun()
-    else:
-        incomplete_steps = [step['name'] for step in steps if not step['status']]
-        st.warning(f"⚠️ **Complete the following steps before proceeding:** {', '.join(incomplete_steps)}")
-
-def show_data_mapping_section():
-    """Display data mapping section with LLM enhancement"""
-    st.markdown("### 🗺️ Data Mapping & Schema Alignment")
-
-    st.info("📋 **Comprehensive CBUAE Schema**: This system supports mapping to all 66 fields of the CBUAE banking compliance dataset, organized into 11 categories including customer info, address, contact details, account information, financial data, dates, KYC & risk, processing stages, contact attempts, transfers, and system fields.")
-
-    # LLM Enable/Disable toggle
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        st.markdown("#### 🤖 Mapping Configuration")
-    with col2:
-        llm_enabled = st.toggle("🧠 Enable LLM", value=st.session_state.llm_enabled)
-        st.session_state.llm_enabled = llm_enabled
-
-    if llm_enabled:
-        st.success("🧠 **LLM-powered automatic column mapping enabled.** The system will use BGE embeddings and AI reasoning to suggest optimal column mappings from your data to the comprehensive CBUAE banking schema (66 fields).")
-    else:
-        st.info("👤 **Manual mapping mode.** You will manually map columns to the comprehensive CBUAE banking schema with guided assistance and field categorization.")
-
-    # Run mapping
-    if st.button("🗺️ Generate Column Mapping", type="primary"):
-        run_column_mapping()
-
-    # Display mapping results
-    if st.session_state.mapping_results:
-        display_mapping_results()
-
-        # Show mapping validation
-        show_mapping_validation()
-
-        # Show data flow status
-        show_data_flow_status()
-
-def run_column_mapping():
-    """Run column mapping with optional LLM enhancement"""
-    try:
-        with st.spinner("🗺️ Generating column mappings..."):
-            data = st.session_state.uploaded_data
-            agent = create_unified_data_processing_agent()
-
-            loop = get_or_create_event_loop()
-            result = loop.run_until_complete(
-                agent.map_columns(
-                    data,
-                    st.session_state.username,
-                    st.session_state.agent_session_id,
-                    st.session_state.llm_enabled,
-                    None  # llm_api_key - can be added from secrets if needed
-                )
-            )
-
-            st.session_state.mapping_results = result
-
-            # Handle both dict and dataclass formats
-            if isinstance(result, dict):
-                success = result.get('success', False)
-                mapping_sheet = result.get('mapping_sheet', None)
-                error = result.get('error', 'Unknown error')
-            else:
-                success = result.success
-                mapping_sheet = result.mapping_sheet
-                error = result.error
-
-            if success:
-                st.session_state.mapping_sheet = mapping_sheet
-
-                # Immediately create processed data after successful mapping
-                create_processed_data()
-
-                st.success("✅ Column mapping completed!")
-                st.info("🔄 Processed data created and ready for dormancy analysis!")
-            else:
-                st.error(f"❌ Mapping failed: {error}")
-
-    except Exception as e:
-        st.error(f"❌ Mapping error: {str(e)}")
-
-def display_mapping_results():
-    """Display column mapping results with download option"""
-    results = st.session_state.mapping_results
-
-    # Handle both dict and dataclass formats safely
-    success = safe_getattr(results, 'success', False)
-    auto_mapping_percentage = safe_getattr(results, 'auto_mapping_percentage', 0)
-    method = safe_getattr(results, 'method', 'unknown')
-    mappings = safe_getattr(results, 'mappings', {})
-    mapping_sheet = safe_getattr(results, 'mapping_sheet', None)
-    processing_time = safe_getattr(results, 'processing_time', 0)
-    error = safe_getattr(results, 'error', 'Unknown error')
-
-    if not success:
-        st.error(f"❌ Mapping failed: {error}")
-        return
-
-    # Mapping statistics
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("🎯 Auto-Mapped", f"{auto_mapping_percentage:.1f}%")
-    with col2:
-        method_display = str(method).replace('_', ' ').title()
-        st.metric("🔧 Method", method_display)
-    with col3:
-        total_mappings = len(mappings) if mappings else 0
-        st.metric("🔗 Total Mappings", total_mappings)
-    with col4:
-        st.metric("⏱️ Processing Time", f"{processing_time:.2f}s")
-
-    # Mapping sheet display
-    if mapping_sheet is not None:
-        st.markdown("#### 📋 Column Mapping Sheet")
-        st.dataframe(mapping_sheet, use_container_width=True)
-
-        # Store mapping sheet in session state for downloads
-        st.session_state.mapping_sheet = mapping_sheet
-
-        # Download mapping sheet
-        create_download_link(
-            mapping_sheet,
-            f"column_mapping_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-            'csv'
-        )
-
-    # Manual mapping adjustment (if LLM disabled or for review)
-    if not st.session_state.llm_enabled or st.button("🔧 Adjust Mappings Manually"):
-        show_manual_mapping_interface()
-
-def show_manual_mapping_interface():
-    """Show manual mapping interface for column adjustment"""
-    st.markdown("#### 🛠️ Manual Column Mapping")
-
-    data = st.session_state.uploaded_data
-    mapping_results = st.session_state.mapping_results
-
-    # Handle both dict and dataclass formats
-    if isinstance(mapping_results, dict):
-        current_mappings = mapping_results.get('mappings', {})
-    else:
-        current_mappings = mapping_results.mappings if mapping_results else {}
-
-    # Comprehensive CBUAE Banking schema options (66 fields)
-    schema_options = [
-        # Customer Information
-        'customer_id', 'customer_type', 'full_name_en', 'full_name_ar',
-        'id_number', 'id_type', 'date_of_birth', 'nationality',
-
-        # Address Information
-        'address_line1', 'address_line2', 'city', 'emirate', 'country',
-        'postal_code', 'address_known',
-
-        # Contact Information
-        'phone_primary', 'phone_secondary', 'email_primary', 'email_secondary',
-        'last_contact_date', 'last_contact_method',
-
-        # KYC and Risk
-        'kyc_status', 'kyc_expiry_date', 'risk_rating',
-
-        # Account Information
-        'account_id', 'account_type', 'account_subtype', 'account_name',
-        'currency', 'account_status', 'dormancy_status',
-
-        # Account Dates
-        'opening_date', 'closing_date', 'last_transaction_date',
-        'last_system_transaction_date',
-
-        # Balance Information
-        'balance_current', 'balance_available', 'balance_minimum',
-        'interest_rate', 'interest_accrued',
-
-        # Account Details
-        'is_joint_account', 'joint_account_holders', 'has_outstanding_facilities',
-        'maturity_date', 'auto_renewal', 'last_statement_date', 'statement_frequency',
-
-        # Tracking and Processing
-        'tracking_id', 'dormancy_trigger_date', 'dormancy_period_start',
-        'dormancy_period_months', 'dormancy_classification_date',
-        'transfer_eligibility_date', 'current_stage',
-
-        # Contact Attempts
-        'contact_attempts_made', 'last_contact_attempt_date',
-        'waiting_period_start', 'waiting_period_end',
-
-        # Transfer Information
-        'transferred_to_ledger_date', 'transferred_to_cb_date',
-        'cb_transfer_amount', 'cb_transfer_reference', 'exclusion_reason',
-
-        # System Fields
-        'created_date', 'updated_date', 'updated_by'
-    ]
-
-    # Create mapping interface
-    new_mappings = {}
-
-    # Group schema fields by category for better organization
-    st.markdown("##### 📋 Available Schema Fields (66 fields total)")
-
-    with st.expander("📖 Schema Categories", expanded=False):
-        st.markdown("""
-        **Customer Info (8):** customer_id, customer_type, full_name_en, full_name_ar, id_number, id_type, date_of_birth, nationality
-        
-        **Address Info (7):** address_line1, address_line2, city, emirate, country, postal_code, address_known
-        
-        **Contact Info (6):** phone_primary, phone_secondary, email_primary, email_secondary, last_contact_date, last_contact_method
-        
-        **Account Info (7):** account_id, account_type, account_subtype, account_name, currency, account_status, dormancy_status
-        
-        **Financial Info (5):** balance_current, balance_available, balance_minimum, interest_rate, interest_accrued
-        
-        **Dates (4):** opening_date, closing_date, last_transaction_date, last_system_transaction_date
-        
-        **KYC & Risk (3):** kyc_status, kyc_expiry_date, risk_rating
-        
-        **Processing (7):** tracking_id, dormancy_trigger_date, dormancy_period_start, dormancy_period_months, dormancy_classification_date, transfer_eligibility_date, current_stage
-        
-        **Contact Attempts (4):** contact_attempts_made, last_contact_attempt_date, waiting_period_start, waiting_period_end
-        
-        **Transfers (5):** transferred_to_ledger_date, transferred_to_cb_date, cb_transfer_amount, cb_transfer_reference, exclusion_reason
-        
-        **System Fields (3):** created_date, updated_date, updated_by
-        """)
-
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("**Source Columns**")
-    with col2:
-        st.markdown("**CBUAE Banking Schema Fields**")
-
-    for i, col in enumerate(data.columns):
-        col1, col2 = st.columns(2)
-        with col1:
-            st.text(col)
-        with col2:
-            default_mapping = current_mappings.get(col, '')
-            default_index = schema_options.index(default_mapping) if default_mapping in schema_options else 0
-
-            mapped_field = st.selectbox(
-                f"Map to:",
-                [''] + schema_options,
-                index=default_index + 1 if default_mapping else 0,
-                key=f"mapping_{i}",
-                help=f"Select CBUAE schema field for '{col}'"
-            )
-            if mapped_field:
-                new_mappings[col] = mapped_field
-
-    if st.button("💾 Save Manual Mappings"):
-        # Update mapping results based on format
-        if isinstance(st.session_state.mapping_results, dict):
-            st.session_state.mapping_results['mappings'] = new_mappings
-            st.session_state.mapping_results['method'] = 'manual'
-            st.session_state.mapping_results['success'] = True  # Ensure success flag is set
-        else:
-            st.session_state.mapping_results.mappings = new_mappings
-            st.session_state.mapping_results.method = 'manual'
-            st.session_state.mapping_results.success = True  # Ensure success flag is set
-
-        # Create updated mapping sheet
-        mapping_data = []
-        for source_col, target_field in new_mappings.items():
-            mapping_data.append({
-                'Source_Column': source_col,
-                'Target_Field': target_field,
-                'Confidence': 'Manual',
-                'Method': 'User Defined'
-            })
-
-        mapping_sheet = pd.DataFrame(mapping_data)
-
-        # Update mapping sheet in results
-        if isinstance(st.session_state.mapping_results, dict):
-            st.session_state.mapping_results['mapping_sheet'] = mapping_sheet
-        else:
-            st.session_state.mapping_results.mapping_sheet = mapping_sheet
-
-        st.session_state.mapping_sheet = mapping_sheet
-
-        # Create processed data immediately after manual mapping
-        create_processed_data()
-
-        st.success("✅ Manual mappings saved!")
-        st.info("🔄 Processed data created and ready for dormancy analysis!")
-
-        # Show summary
-        if new_mappings:
-            st.markdown("#### 📊 Mapping Summary")
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("📝 Fields Mapped", len(new_mappings))
-            with col2:
-                st.metric("📋 Total Fields", len(data.columns))
-            with col3:
-                mapping_percentage = (len(new_mappings) / len(data.columns)) * 100
-                st.metric("✅ Coverage", f"{mapping_percentage:.1f}%")
+    # Update session state with edited mappings
+    if not edited_df.equals(filtered_df):
+        st.session_state.mapping_results['mappings'] = edited_df.to_dict('records')
+        st.success("✅ Mapping updated!")
 
 # ===================== DORMANCY ANALYSIS SECTION =====================
 
 def show_dormancy_analysis_section():
-    """Display comprehensive dormancy analysis interface"""
+    """Display dormancy analysis with all 10 agents"""
     st.markdown('<div class="section-header">💤 Dormancy Analysis</div>', unsafe_allow_html=True)
 
-    if not AGENTS_STATUS['dormancy']:
-        st.error("❌ Dormancy analysis agents not available")
+    if not DORMANCY_AGENTS_AVAILABLE:
+        st.error("❌ Dormancy agents not available")
         return
 
-    # Check data flow and requirements
     if st.session_state.uploaded_data is None:
-        st.error("❌ **No data uploaded.** Please upload data in the Data Processing section.")
+        st.warning("⚠️ Please upload data first in the Data Processing section")
         return
 
-    if st.session_state.mapping_results is None:
-        st.warning("⚠️ **No column mapping found.** Please run column mapping in the Data Processing section.")
-        return
+    # Run dormancy analysis
+    if st.button("🔬 Run Comprehensive Dormancy Analysis", use_container_width=True):
+        with st.spinner("🔄 Running all 10 dormancy agents..."):
+            try:
+                # Run async function
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
 
-    if st.session_state.processed_data is None:
-        st.warning("⚠️ **No processed data found.** Creating processed data from mappings...")
-        create_processed_data()
+                dormancy_results = loop.run_until_complete(
+                    run_comprehensive_dormancy_analysis_with_csv(
+                        user_id=st.session_state.username,
+                        account_data=st.session_state.uploaded_data
+                    )
+                )
 
-        if st.session_state.processed_data is None:
-            st.error("❌ **Failed to create processed data.** Please check your column mappings.")
-            return
+                st.session_state.dormancy_results = dormancy_results
 
-    # Data flow status
-    data = st.session_state.processed_data
-    original_data = st.session_state.uploaded_data
+                if dormancy_results['success']:
+                    st.success("✅ Dormancy analysis completed successfully!")
 
-    st.markdown("### 📊 Data Flow Status")
-    col1, col2, col3, col4 = st.columns(4)
+                    # Display summary metrics
+                    summary = dormancy_results.get('summary', {})
+                    col1, col2, col3, col4 = st.columns(4)
 
-    with col1:
-        st.metric("📤 Uploaded Records", f"{len(original_data):,}")
+                    with col1:
+                        st.metric("Total Accounts", summary.get('total_accounts_analyzed', 0))
+                    with col2:
+                        st.metric("Dormant Found", summary.get('total_dormant_accounts_found', 0))
+                    with col3:
+                        st.metric("Agents Executed", summary.get('agents_executed', 0))
+                    with col4:
+                        st.metric("CSV Files", summary.get('csv_exports_available', 0))
 
-    with col2:
-        st.metric("🗺️ Processed Records", f"{len(data):,}")
+                else:
+                    st.error(f"❌ Dormancy analysis failed: {dormancy_results.get('error', 'Unknown error')}")
 
-    with col3:
-        mapped_columns = len([col for col in data.columns if col in get_comprehensive_banking_schema().keys()])
-        st.metric("✅ Mapped Columns", f"{mapped_columns}")
+            except Exception as e:
+                st.error(f"❌ Analysis failed: {str(e)}")
 
-    with col4:
-        required_mapped = len([field for field in get_required_fields() if field in data.columns])
-        total_required = len(get_required_fields())
-        st.metric("🔴 Required Fields", f"{required_mapped}/{total_required}")
+    # Display individual agent results
+    if st.session_state.dormancy_results and st.session_state.dormancy_results['success']:
+        display_dormancy_agent_results()
 
-    # Validation checks
-    missing_required = [field for field in get_required_fields() if field not in data.columns]
+def display_dormancy_agent_results():
+    """Display results from all dormancy agents with download options"""
+    results = st.session_state.dormancy_results
+    agent_results = results.get('agent_results', {})
+    csv_exports = results.get('csv_exports', {})
 
-    if missing_required:
-        st.error(f"❌ **Missing required fields for CBUAE compliance:** {', '.join(missing_required)}")
-        st.info("💡 **Action needed:** Please return to Data Processing section and map these required fields.")
+    st.markdown("---")
+    st.markdown("#### 🤖 Individual Dormancy Agent Results")
 
-        if st.button("🔄 Refresh Data Flow"):
-            create_processed_data()
-            st.rerun()
-        return
-    else:
-        st.success("✅ **All required fields are mapped.** Ready for dormancy analysis!")
-
-    # Show processed data preview
-    with st.expander("🔍 Processed Data Preview", expanded=False):
-        st.markdown("#### Mapped Column Overview")
-        col_info = []
-        for col in data.columns:
-            if col in get_comprehensive_banking_schema():
-                schema_info = get_schema_field_info(col)
-                col_info.append({
-                    'Column': col,
-                    'Type': schema_info.get('type', 'unknown'),
-                    'Required': '🔴 Yes' if schema_info.get('required', False) else '🟡 No',
-                    'Description': schema_info.get('description', 'No description')
-                })
-
-        if col_info:
-            col_df = pd.DataFrame(col_info)
-            st.dataframe(col_df, use_container_width=True)
-
-        st.markdown("#### Data Sample")
-        st.dataframe(data.head(5), use_container_width=True)
-
-    # Dormancy analysis overview
-    st.markdown("### 🔍 CBUAE Dormancy Compliance Analysis")
-    st.info("This section analyzes accounts for dormancy compliance according to CBUAE regulations using 11 specialized agents.")
-
-    # Individual dormancy agents - ALL 11 AGENTS
-    dormancy_agents_config = [
-        # Primary Detection Agents (5 agents)
-        {
+    # Agent information
+    dormancy_agents_info = {
+        'demand_deposit': {
             'name': 'Demand Deposit Dormancy',
-            'description': 'Analyzes current/checking accounts for dormancy per CBUAE Art. 2.1.1',
             'article': 'CBUAE Art. 2.1.1',
-            'key': 'check_demand_deposit_inactivity',
-            'category': 'Primary Detection'
+            'description': 'Analyzes savings/checking accounts for 12-month dormancy'
         },
-        {
+        'fixed_deposit': {
             'name': 'Fixed Deposit Dormancy',
-            'description': 'Analyzes fixed/term deposits for dormancy per CBUAE Art. 2.1.2',
             'article': 'CBUAE Art. 2.1.2',
-            'key': 'check_fixed_deposit_inactivity',
-            'category': 'Primary Detection'
+            'description': 'Analyzes term deposits for post-maturity dormancy'
         },
-        {
+        'investment_account': {
             'name': 'Investment Account Dormancy',
-            'description': 'Analyzes investment accounts for inactivity per CBUAE Art. 2.2',
             'article': 'CBUAE Art. 2.2',
-            'key': 'check_investment_inactivity',
-            'category': 'Primary Detection'
+            'description': 'Analyzes investment portfolios and mutual funds'
         },
-        {
-            'name': 'Safe Deposit Box Dormancy',
-            'description': 'Detects dormant safe deposit boxes with unpaid fees per CBUAE Art. 2.6',
-            'article': 'CBUAE Art. 2.6',
-            'key': 'check_safe_deposit_dormancy',
-            'category': 'Primary Detection'
-        },
-        {
-            'name': 'Unclaimed Payment Instruments',
-            'description': 'Identifies unclaimed payment instruments per CBUAE Art. 2.4',
-            'article': 'CBUAE Art. 2.4',
-            'key': 'check_unclaimed_payment_instruments',
-            'category': 'Primary Detection'
-        },
-
-        # Process & Transfer Agents (3 agents)
-        {
-            'name': 'CB Transfer Eligibility',
-            'description': 'Identifies accounts eligible for Central Bank transfer per CBUAE Art. 8.1, 8.2',
-            'article': 'CBUAE Art. 8.1, 8.2',
-            'key': 'check_eligible_for_cb_transfer',
-            'category': 'Process & Transfer'
-        },
-        {
-            'name': 'Article 3 Process Required',
-            'description': 'Identifies accounts requiring Article 3 process per CBUAE Art. 3',
-            'article': 'CBUAE Art. 3',
-            'key': 'check_art3_process_needed',
-            'category': 'Process & Transfer'
-        },
-        {
-            'name': 'Contact Attempts Needed',
-            'description': 'Identifies accounts requiring proactive contact per CBUAE Art. 5',
+        'contact_attempts': {
+            'name': 'Contact Attempts Verification',
             'article': 'CBUAE Art. 5',
-            'key': 'check_contact_attempts_needed',
-            'category': 'Process & Transfer'
+            'description': 'Verifies minimum 3 contact attempts compliance'
         },
-
-        # Specialized Analysis Agents (2 agents)
-        {
+        'cb_transfer': {
+            'name': 'CB Transfer Eligibility',
+            'article': 'CBUAE Art. 8',
+            'description': 'Identifies accounts for Central Bank transfer (5+ years)'
+        },
+        'foreign_currency': {
+            'name': 'Foreign Currency Conversion',
+            'article': 'CBUAE Art. 8.5',
+            'description': 'Manages foreign currency conversion requirements'
+        },
+        'high_value_dormant': {
             'name': 'High Value Dormant Accounts',
-            'description': 'Identifies high-value dormant accounts requiring special attention',
-            'article': 'Internal Policy',
-            'key': 'check_high_value_dormant_accounts',
-            'category': 'Specialized Analysis'
+            'article': 'High Value Monitoring',
+            'description': 'Executive escalation for high-value accounts (500K+ AED)'
         },
-        {
-            'name': 'Dormant to Active Transitions',
-            'description': 'Monitors accounts transitioning from dormant to active status',
-            'article': 'Internal Policy',
-            'key': 'check_dormant_to_active_transitions',
-            'category': 'Specialized Analysis'
+        'dormancy_escalation': {
+            'name': 'Dormancy Escalation',
+            'article': 'Escalation Procedures',
+            'description': 'Management escalation and timeline procedures'
         },
-
-        # Master Orchestrator (1 agent)
-        {
-            'name': 'Comprehensive Dormancy Analysis',
-            'description': 'Master orchestrator running all dormancy identification checks',
-            'article': 'All Articles',
-            'key': 'run_all_dormant_identification_checks',
-            'category': 'Master Orchestrator'
+        'statement_suppression': {
+            'name': 'Statement Suppression',
+            'article': 'CBUAE Art. 7.3',
+            'description': 'Statement suppression for 6+ month dormant accounts'
+        },
+        'internal_ledger_transfer': {
+            'name': 'Internal Ledger Transfer',
+            'article': 'CBUAE Art. 3',
+            'description': 'Internal ledger transfer after contact attempts'
         }
-    ]
+    }
 
-    # Display agent cards organized by category
-    st.markdown("### 🤖 Available Dormancy Agents (11 Total)")
+    # Display each agent
+    for agent_key, agent_info in dormancy_agents_info.items():
+        if agent_key in agent_results:
+            agent_result = agent_results[agent_key]
 
-    # Group agents by category
-    agents_by_category = {}
-    for agent in dormancy_agents_config:
-        category = agent['category']
-        if category not in agents_by_category:
-            agents_by_category[category] = []
-        agents_by_category[category].append(agent)
+            with st.expander(f"📊 {agent_info['name']} ({agent_info['article']})", expanded=False):
+                col1, col2, col3 = st.columns([2, 1, 1])
 
-    # Display each category
-    for category, agents in agents_by_category.items():
-        with st.expander(f"📂 {category} ({len(agents)} agents)", expanded=False):
-            for agent_config in agents:
-                display_dormancy_agent_card(agent_config, data)
-
-    # Comprehensive analysis
-    st.markdown("### 🏃‍♂️ Comprehensive Dormancy Analysis")
-
-    if st.button("🚀 Run All Dormancy Agents", type="primary", use_container_width=True):
-        run_comprehensive_dormancy_analysis(data)
-
-    # Display comprehensive results
-    if st.session_state.dormancy_results:
-        display_comprehensive_dormancy_results()
-
-def create_processed_data():
-    """Create processed data by applying column mappings"""
-    try:
-        if st.session_state.uploaded_data is None:
-            st.error("❌ No uploaded data found")
-            return False
-
-        original_data = st.session_state.uploaded_data
-        mapping_results = st.session_state.mapping_results
-
-        if not mapping_results:
-            st.warning("⚠️ No mapping results found")
-            st.session_state.processed_data = original_data.copy()
-            return False
-
-        # Handle both dict and dataclass formats
-        success = safe_getattr(mapping_results, 'success', False)
-        mappings = safe_getattr(mapping_results, 'mappings', {})
-
-        if not success:
-            st.warning("⚠️ Mapping was not successful")
-            st.session_state.processed_data = original_data.copy()
-            return False
-
-        if not mappings:
-            st.warning("⚠️ No column mappings found")
-            st.session_state.processed_data = original_data.copy()
-            return False
-
-        # Create mapped dataframe
-        processed_data = original_data.copy()
-
-        # Apply column mappings
-        rename_dict = {k: v for k, v in mappings.items() if v and v.strip()}
-
-        if rename_dict:
-            processed_data = processed_data.rename(columns=rename_dict)
-
-            # Log the transformation
-            logger.info(f"Applied column mappings: {len(rename_dict)} columns renamed")
-
-            # Add any missing required columns with null values (for safety)
-            required_fields = get_required_fields()
-            for field in required_fields:
-                if field not in processed_data.columns:
-                    processed_data[field] = None
-                    logger.warning(f"Added missing required field '{field}' with null values")
-
-        st.session_state.processed_data = processed_data
-
-        # Store processing metadata
-        st.session_state.processing_metadata = {
-            'original_columns': len(original_data.columns),
-            'processed_columns': len(processed_data.columns),
-            'mapped_columns': len(rename_dict),
-            'processing_time': datetime.now().isoformat(),
-            'required_fields_present': len([f for f in get_required_fields() if f in processed_data.columns])
-        }
-
-        return True
-
-    except Exception as e:
-        st.error(f"❌ Error creating processed data: {str(e)}")
-        logger.error(f"create_processed_data error: {str(e)}")
-        # Fallback to original data
-        st.session_state.processed_data = st.session_state.uploaded_data.copy() if st.session_state.uploaded_data is not None else None
-        return False
-
-def display_dormancy_agent_card(agent_config, data):
-    """Display individual dormancy agent card"""
-    with st.container():
-        st.markdown('<div class="agent-card">', unsafe_allow_html=True)
-
-        col1, col2, col3 = st.columns([2, 3, 1])
-
-        with col1:
-            st.markdown(f"**🔍 {agent_config['name']}**")
-            st.markdown(f"*{agent_config['article']}*")
-
-        with col2:
-            st.markdown(f"{agent_config['description']}")
-
-        with col3:
-            if st.button(f"▶️ Run", key=f"run_{agent_config['key']}"):
-                run_individual_dormancy_agent(agent_config, data)
-
-        # Display results if available
-        if st.session_state.dormancy_results:
-            agent_results = st.session_state.dormancy_results.get('agent_results', {})
-            if agent_config['key'] in agent_results:
-                result = agent_results[agent_config['key']]
-
-                col1, col2, col3 = st.columns(3)
                 with col1:
-                    st.metric("Records Processed", f"{result.get('records_processed', 0):,}")
+                    st.markdown(f"**Description:** {agent_info['description']}")
+                    st.markdown(f"**Status:** {'✅ Success' if agent_result.get('success') else '❌ Failed'}")
+
+                    if agent_result.get('success'):
+                        st.markdown(f"**Records Processed:** {agent_result.get('records_processed', 0):,}")
+                        st.markdown(f"**Dormant Found:** {agent_result.get('dormant_records_found', 0):,}")
+                        st.markdown(f"**Processing Time:** {agent_result.get('processing_time', 0):.2f}s")
+
                 with col2:
-                    st.metric("Dormant Found", f"{result.get('dormant_records_found', 0):,}")
+                    # Summary button
+                    if st.button(f"📋 View Summary", key=f"summary_{agent_key}"):
+                        if agent_result.get('analysis_results'):
+                            st.json(agent_result['analysis_results'].get('summary_stats', {}))
+
                 with col3:
-                    if result.get('dormant_records_found', 0) > 0:
-                        create_download_link(
-                            result.get('details', []),
-                            f"{agent_config['key']}_results",
-                            'csv'
+                    # CSV download button
+                    if agent_key in csv_exports and csv_exports[agent_key].get('available'):
+                        csv_data = csv_exports[agent_key]
+
+                        st.download_button(
+                            "📄 Download CSV",
+                            csv_data['csv_data'],
+                            csv_data['filename'],
+                            "text/csv",
+                            key=f"download_{agent_key}",
+                            use_container_width=True
                         )
 
-        st.markdown('</div>', unsafe_allow_html=True)
+                        st.caption(f"{csv_data['records']} records ({csv_data['file_size_kb']:.1f} KB)")
+                    else:
+                        st.caption("No data found")
 
-def run_individual_dormancy_agent(agent_config, data):
-    """Run individual dormancy agent"""
-    try:
-        with st.spinner(f"🔄 Running {agent_config['name']}..."):
-            # Placeholder for individual agent execution
-            # In actual implementation, you would call the specific agent
-
-            # Simulate processing
-            import time
-            time.sleep(1)
-
-            # Mock results
-            mock_result = {
-                'records_processed': len(data),
-                'dormant_records_found': np.random.randint(0, len(data) // 10),
-                'processing_time': np.random.uniform(0.5, 2.0),
-                'success': True,
-                'details': []
-            }
-
-            # Update session state
-            if 'agent_results' not in st.session_state.dormancy_results:
-                st.session_state.dormancy_results = {'agent_results': {}}
-
-            st.session_state.dormancy_results['agent_results'][agent_config['key']] = mock_result
-
-            st.success(f"✅ {agent_config['name']} completed!")
-            st.rerun()
-
-    except Exception as e:
-        st.error(f"❌ Error running {agent_config['name']}: {str(e)}")
-
-def run_comprehensive_dormancy_analysis(data):
-    """Run comprehensive dormancy analysis using all agents"""
-    try:
-        with st.spinner("🔄 Running comprehensive CBUAE dormancy analysis..."):
-            loop = get_or_create_event_loop()
-
-            # Run comprehensive analysis
-            result = loop.run_until_complete(
-                run_comprehensive_dormancy_analysis_csv(
-                    user_id=st.session_state.username,
-                    account_data=data,
-                    report_date=datetime.now().strftime("%Y-%m-%d")
-                )
-            )
-
-            st.session_state.dormancy_results = result
-
-            if result.get('success'):
-                st.success("✅ Comprehensive dormancy analysis completed!")
-            else:
-                st.error(f"❌ Analysis failed: {result.get('error', 'Unknown error')}")
-
-    except Exception as e:
-        st.error(f"❌ Comprehensive analysis failed: {str(e)}")
-
-def display_comprehensive_dormancy_results():
-    """Display comprehensive dormancy analysis results"""
-    results = st.session_state.dormancy_results
-
-    if not results.get('success'):
-        st.error(f"❌ Analysis failed: {results.get('error', 'Unknown error')}")
-        return
-
-    st.markdown("### 📊 Comprehensive Dormancy Analysis Results")
-
-    # Summary metrics
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("📊 Total Accounts", f"{results.get('total_accounts_analyzed', 0):,}")
-    with col2:
-        st.metric("💤 Dormant Accounts", f"{results.get('total_dormant_accounts_found', 0):,}")
-    with col3:
-        st.metric("⏱️ Processing Time", f"{results.get('processing_time_seconds', 0):.2f}s")
-    with col4:
-        compliance_flags = len(results.get('compliance_flags', []))
-        st.metric("⚠️ Compliance Flags", compliance_flags)
-
-    # Agent-specific results
-    agent_results = results.get('agent_results', {})
-    if agent_results:
-        st.markdown("#### 🤖 Agent Results Summary")
-
-        agent_summary = []
-        for agent_name, agent_result in agent_results.items():
-            if agent_result.get('dormant_records_found', 0) > 0:
-                agent_summary.append({
-                    'Agent': agent_name.replace('_', ' ').title(),
-                    'Records Processed': f"{agent_result.get('records_processed', 0):,}",
-                    'Dormant Found': f"{agent_result.get('dormant_records_found', 0):,}",
-                    'Status': '✅ Completed' if agent_result.get('success') else '❌ Failed'
-                })
-
-        if agent_summary:
-            st.dataframe(pd.DataFrame(agent_summary), use_container_width=True)
-
-            # Download comprehensive results
-            create_download_link(
-                pd.DataFrame(agent_summary),
-                f"dormancy_analysis_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-                'csv'
-            )
-
-# ===================== COMPLIANCE VERIFICATION SECTION =====================
+# ===================== COMPLIANCE ANALYSIS SECTION =====================
 
 def show_compliance_analysis_section():
-    """Display compliance verification analysis interface"""
-    st.markdown('<div class="section-header">⚖️ CBUAE Compliance Verification</div>', unsafe_allow_html=True)
+    """Display compliance analysis with all 17 agents"""
+    st.markdown('<div class="section-header">⚖️ Compliance Verification</div>', unsafe_allow_html=True)
 
-    if not AGENTS_STATUS['compliance']:
-        st.error("❌ Compliance verification agents not available")
+    if not COMPLIANCE_AGENTS_AVAILABLE:
+        st.error("❌ Compliance agents not available")
         return
 
-    # Check data flow requirements
-    if st.session_state.processed_data is None:
-        st.warning("⚠️ **No processed data found.** Please complete data processing and mapping first.")
-
-        if st.button("🔄 Check Data Status"):
-            if st.session_state.mapping_results:
-                create_processed_data()
-                st.rerun()
-            else:
-                st.error("❌ No mapping results found. Please complete column mapping first.")
+    if st.session_state.uploaded_data is None:
+        st.warning("⚠️ Please upload data first in the Data Processing section")
         return
 
-    data = st.session_state.processed_data
+    # Run compliance analysis
+    if st.button("🔬 Run Comprehensive Compliance Analysis", use_container_width=True):
+        with st.spinner("🔄 Running all 17 compliance agents..."):
+            try:
+                # Run async function
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
 
-    # Data validation for compliance
-    required_fields = get_required_fields()
-    missing_required = [field for field in required_fields if field not in data.columns]
-
-    if missing_required:
-        st.error(f"❌ **Missing required fields:** {', '.join(missing_required)}")
-        st.info("💡 Please return to Data Processing and ensure all required fields are mapped.")
-        return
-
-    # Show data readiness status
-    st.markdown("### 📊 Compliance Data Status")
-    col1, col2, col3, col4 = st.columns(4)
-
-    with col1:
-        st.metric("📋 Total Records", f"{len(data):,}")
-
-    with col2:
-        mapped_fields = len([col for col in data.columns if col in get_comprehensive_banking_schema().keys()])
-        st.metric("✅ Mapped Fields", f"{mapped_fields}")
-
-    with col3:
-        required_present = len([field for field in required_fields if field in data.columns])
-        st.metric("🔴 Required Fields", f"{required_present}/{len(required_fields)}")
-
-    with col4:
-        # Check if we have dormancy results to build upon
-        has_dormancy = st.session_state.dormancy_results is not None
-        st.metric("💤 Dormancy Results", "✅ Available" if has_dormancy else "❌ Missing")
-
-    if not has_dormancy:
-        st.info("💡 **Tip:** Run dormancy analysis first for more comprehensive compliance verification.")
-
-    # Compliance analysis overview
-    st.markdown("### ⚖️ CBUAE Compliance Verification")
-    st.info("This section verifies compliance with CBUAE regulations using 17 specialized compliance agents.")
-
-    # Individual compliance agents - ALL 17 AGENTS
-    compliance_agents_config = [
-        # Contact & Communication Agents (2 agents)
-        {
-            'name': 'Incomplete Contact Attempts',
-            'description': 'Detects accounts with incomplete contact attempt processes',
-            'article': 'CBUAE Art. 3.1, 5',
-            'key': 'detect_incomplete_contact_attempts',
-            'category': 'Contact & Communication'
-        },
-        {
-            'name': 'Unflagged Dormant Candidates',
-            'description': 'Identifies accounts that should be flagged as dormant but are not',
-            'article': 'CBUAE Art. 2',
-            'key': 'detect_unflagged_dormant_candidates',
-            'category': 'Contact & Communication'
-        },
-
-        # Process Management Agents (3 agents)
-        {
-            'name': 'Internal Ledger Candidates',
-            'description': 'Identifies accounts ready for internal ledger transfer',
-            'article': 'CBUAE Art. 3.4, 3.5',
-            'key': 'detect_internal_ledger_candidates',
-            'category': 'Process Management'
-        },
-        {
-            'name': 'Statement Freeze Candidates',
-            'description': 'Identifies accounts eligible for statement suppression',
-            'article': 'CBUAE Art. 7.3',
-            'key': 'detect_statement_freeze_candidates',
-            'category': 'Process Management'
-        },
-        {
-            'name': 'CBUAE Transfer Candidates',
-            'description': 'Identifies accounts ready for Central Bank transfer',
-            'article': 'CBUAE Art. 8',
-            'key': 'detect_cbuae_transfer_candidates',
-            'category': 'Process Management'
-        },
-
-        # Specialized Compliance Agents (4 agents)
-        {
-            'name': 'Foreign Currency Conversion',
-            'description': 'Detects foreign currency accounts needing conversion before transfer',
-            'article': 'CBUAE Art. 8.5',
-            'key': 'detect_foreign_currency_conversion_needed',
-            'category': 'Specialized Compliance'
-        },
-        {
-            'name': 'SDB Court Application',
-            'description': 'Identifies safe deposit boxes requiring court applications',
-            'article': 'CBUAE Art. 3.7',
-            'key': 'detect_sdb_court_application_needed',
-            'category': 'Specialized Compliance'
-        },
-        {
-            'name': 'Unclaimed Instruments Ledger',
-            'description': 'Identifies unclaimed payment instruments for ledger transfer',
-            'article': 'CBUAE Art. 3.6',
-            'key': 'detect_unclaimed_payment_instruments_ledger',
-            'category': 'Specialized Compliance'
-        },
-        {
-            'name': 'Claim Processing Pending',
-            'description': 'Detects pending customer claims requiring processing',
-            'article': 'CBUAE Art. 4',
-            'key': 'detect_claim_processing_pending',
-            'category': 'Specialized Compliance'
-        },
-
-        # Reporting & Retention Agents (2 agents)
-        {
-            'name': 'Annual CBUAE Report',
-            'description': 'Generates annual CBUAE compliance report summary',
-            'article': 'CBUAE Art. 3.10',
-            'key': 'generate_annual_cbuae_report_summary',
-            'category': 'Reporting & Retention'
-        },
-        {
-            'name': 'Record Retention Compliance',
-            'description': 'Checks compliance with record retention requirements',
-            'article': 'CBUAE Art. 3.9',
-            'key': 'check_record_retention_compliance',
-            'category': 'Reporting & Retention'
-        },
-
-        # Utility Agents (5 agents)
-        {
-            'name': 'Flag Instructions Logger',
-            'description': 'Logs flagging instructions for dormant accounts',
-            'article': 'Internal',
-            'key': 'log_flag_instructions',
-            'category': 'Utility'
-        },
-        {
-            'name': 'Flag Candidates Detection',
-            'description': 'Alias for unflagged dormant candidate detection',
-            'article': 'CBUAE Art. 2',
-            'key': 'detect_flag_candidates',
-            'category': 'Utility'
-        },
-        {
-            'name': 'Ledger Candidates Detection',
-            'description': 'Alias for internal ledger candidate detection',
-            'article': 'CBUAE Art. 3.4, 3.5',
-            'key': 'detect_ledger_candidates',
-            'category': 'Utility'
-        },
-        {
-            'name': 'Freeze Candidates Detection',
-            'description': 'Alias for statement freeze candidate detection',
-            'article': 'CBUAE Art. 7.3',
-            'key': 'detect_freeze_candidates',
-            'category': 'Utility'
-        },
-        {
-            'name': 'CB Transfer Candidates Detection',
-            'description': 'Alias for CBUAE transfer candidate detection',
-            'article': 'CBUAE Art. 8',
-            'key': 'detect_transfer_candidates_to_cb',
-            'category': 'Utility'
-        },
-
-        # Master Orchestrator (1 agent)
-        {
-            'name': 'Comprehensive Compliance Analysis',
-            'description': 'Master orchestrator running all compliance verification checks',
-            'article': 'All Articles',
-            'key': 'run_all_compliance_checks',
-            'category': 'Master Orchestrator'
-        }
-    ]
-
-    # Display compliance agent cards organized by category
-    st.markdown("### 🤖 Available Compliance Agents (17 Total)")
-
-    # Group agents by category
-    compliance_agents_by_category = {}
-    for agent in compliance_agents_config:
-        category = agent['category']
-        if category not in compliance_agents_by_category:
-            compliance_agents_by_category[category] = []
-        compliance_agents_by_category[category].append(agent)
-
-    # Display each category
-    for category, agents in compliance_agents_by_category.items():
-        with st.expander(f"📂 {category} ({len(agents)} agents)", expanded=False):
-            for agent_config in agents:
-                display_compliance_agent_card(agent_config, data)
-
-    # Comprehensive compliance analysis
-    st.markdown("### 🏃‍♂️ Comprehensive Compliance Analysis")
-
-    if st.button("🚀 Run All Compliance Checks", type="primary", use_container_width=True):
-        run_comprehensive_compliance_analysis(data)
-
-    # Display comprehensive compliance results
-    if st.session_state.compliance_results:
-        display_comprehensive_compliance_results()
-
-def display_compliance_agent_card(agent_config, data):
-    """Display individual compliance agent card"""
-    with st.container():
-        st.markdown('<div class="agent-card">', unsafe_allow_html=True)
-
-        col1, col2, col3 = st.columns([2, 3, 1])
-
-        with col1:
-            st.markdown(f"**⚖️ {agent_config['name']}**")
-            st.markdown(f"*{agent_config['article']}*")
-
-        with col2:
-            st.markdown(f"{agent_config['description']}")
-
-        with col3:
-            if st.button(f"▶️ Run", key=f"compliance_run_{agent_config['key']}"):
-                run_individual_compliance_agent(agent_config, data)
-
-        # Display results if available
-        if st.session_state.compliance_results:
-            if agent_config['key'] in st.session_state.compliance_results:
-                result = st.session_state.compliance_results[agent_config['key']]
-
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Records Processed", f"{result.get('accounts_processed', 0):,}")
-                with col2:
-                    st.metric("Violations Found", f"{result.get('violations_found', 0):,}")
-                with col3:
-                    if result.get('violations_found', 0) > 0:
-                        create_download_link(
-                            result.get('actions_generated', []),
-                            f"{agent_config['key']}_actions",
-                            'json'
-                        )
-
-        st.markdown('</div>', unsafe_allow_html=True)
-
-def run_individual_compliance_agent(agent_config, data):
-    """Run individual compliance agent"""
-    try:
-        with st.spinner(f"🔄 Running {agent_config['name']}..."):
-            # Placeholder for individual compliance agent execution
-            # In actual implementation, you would call the specific compliance agent
-
-            # Simulate processing
-            import time
-            time.sleep(1)
-
-            # Mock results
-            mock_result = {
-                'accounts_processed': len(data),
-                'violations_found': np.random.randint(0, len(data) // 20),
-                'processing_time': np.random.uniform(0.5, 2.0),
-                'success': True,
-                'actions_generated': []
-            }
-
-            # Update session state
-            if st.session_state.compliance_results is None:
-                st.session_state.compliance_results = {}
-
-            st.session_state.compliance_results[agent_config['key']] = mock_result
-
-            st.success(f"✅ {agent_config['name']} completed!")
-            st.rerun()
-
-    except Exception as e:
-        st.error(f"❌ Error running {agent_config['name']}: {str(e)}")
-
-def run_comprehensive_compliance_analysis(data):
-    """Run comprehensive compliance analysis using all agents"""
-    try:
-        with st.spinner("🔄 Running comprehensive CBUAE compliance analysis..."):
-            loop = get_or_create_event_loop()
-
-            # Prepare dormancy results (if available)
-            dormancy_results = st.session_state.dormancy_results or {}
-
-            # Run comprehensive compliance analysis
-            result = loop.run_until_complete(
-                run_comprehensive_compliance_analysis_csv(
-                    user_id=st.session_state.username,
-                    dormancy_results=dormancy_results,
-                    accounts_df=data
+                compliance_results = loop.run_until_complete(
+                    run_comprehensive_compliance_analysis_with_csv(
+                        user_id=st.session_state.username,
+                        dormancy_results=st.session_state.dormancy_results,
+                        accounts_df=st.session_state.uploaded_data
+                    )
                 )
-            )
 
-            st.session_state.compliance_results = result
+                st.session_state.compliance_results = compliance_results
 
-            if result.get('success'):
-                st.success("✅ Comprehensive compliance analysis completed!")
-            else:
-                st.error(f"❌ Compliance analysis failed: {result.get('error', 'Unknown error')}")
+                if compliance_results['success']:
+                    st.success("✅ Compliance analysis completed successfully!")
 
-    except Exception as e:
-        st.error(f"❌ Comprehensive compliance analysis failed: {str(e)}")
+                    # Display summary metrics
+                    summary = compliance_results.get('compliance_summary', {})
+                    col1, col2, col3, col4 = st.columns(4)
 
-def display_comprehensive_compliance_results():
-    """Display comprehensive compliance analysis results"""
+                    with col1:
+                        st.metric("Total Accounts", summary.get('total_accounts_analyzed', 0))
+                    with col2:
+                        st.metric("Violations Found", summary.get('total_violations_found', 0))
+                    with col3:
+                        st.metric("Actions Generated", summary.get('total_actions_generated', 0))
+                    with col4:
+                        st.metric("Risk Level", summary.get('regulatory_risk_level', 'Unknown'))
+
+                else:
+                    st.error(f"❌ Compliance analysis failed: {compliance_results.get('error', 'Unknown error')}")
+
+            except Exception as e:
+                st.error(f"❌ Analysis failed: {str(e)}")
+
+    # Display individual agent results
+    if st.session_state.compliance_results and st.session_state.compliance_results['success']:
+        display_compliance_agent_results()
+
+def display_compliance_agent_results():
+    """Display results from all compliance agents with download options"""
     results = st.session_state.compliance_results
+    agent_results = results.get('agent_results', {})
+    csv_exports = results.get('csv_exports', {})
 
-    if not results.get('success'):
-        st.error(f"❌ Compliance analysis failed: {results.get('error', 'Unknown error')}")
-        return
+    st.markdown("---")
+    st.markdown("#### 🤖 Individual Compliance Agent Results")
 
-    st.markdown("### 📊 Comprehensive Compliance Analysis Results")
+    # Get agent info from the compliance module
+    try:
+        all_agents_info = get_all_compliance_agents_info()
+        agents_by_category = all_agents_info.get('agents_by_category', {})
+    except:
+        # Fallback agent information
+        agents_by_category = {
+            "Contact & Communication": [
+                {"agent_name": "incomplete_contact", "cbuae_article": "CBUAE Art. 3.1, 5"},
+                {"agent_name": "unflagged_dormant", "cbuae_article": "CBUAE Art. 2"}
+            ],
+            "Process Management": [
+                {"agent_name": "internal_ledger", "cbuae_article": "CBUAE Art. 3.4, 3.5"},
+                {"agent_name": "statement_freeze", "cbuae_article": "CBUAE Art. 7.3"},
+                {"agent_name": "cbuae_transfer", "cbuae_article": "CBUAE Art. 8"}
+            ],
+            "Specialized Compliance": [
+                {"agent_name": "fx_conversion", "cbuae_article": "CBUAE Art. 8.5"},
+                {"agent_name": "sdb_court", "cbuae_article": "CBUAE Art. 3.7"},
+                {"agent_name": "unclaimed_instruments", "cbuae_article": "CBUAE Art. 3.6"},
+                {"agent_name": "claim_processing", "cbuae_article": "CBUAE Art. 4"}
+            ],
+            "Reporting & Retention": [
+                {"agent_name": "annual_report", "cbuae_article": "CBUAE Art. 3.10"},
+                {"agent_name": "record_retention", "cbuae_article": "Record Retention"}
+            ],
+            "Utility": [
+                {"agent_name": "log_flags", "cbuae_article": "Flag Logging"}
+            ]
+        }
 
-    # Summary metrics
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("📊 Total Accounts", f"{results.get('total_accounts_analyzed', 0):,}")
-    with col2:
-        st.metric("⚠️ Total Violations", f"{results.get('total_violations', 0):,}")
-    with col3:
-        st.metric("📋 Actions Generated", f"{results.get('total_actions', 0):,}")
-    with col4:
-        st.metric("⏱️ Processing Time", f"{results.get('processing_time_seconds', 0):.2f}s")
+    # Display by category
+    for category, category_agents in agents_by_category.items():
+        st.markdown(f"##### 📂 {category}")
 
-    # Compliance status
-    compliance_status = results.get('compliance_status', 'unknown')
-    if compliance_status == 'compliant':
-        st.success("✅ All accounts are compliant with CBUAE regulations")
-    elif compliance_status == 'action_required':
-        st.warning("⚠️ Some accounts require compliance actions")
-    else:
-        st.info("ℹ️ Compliance analysis in progress")
+        for agent_info in category_agents:
+            agent_key = agent_info.get('agent_name', '')
+            if agent_key in agent_results:
+                agent_result = agent_results[agent_key]
 
-    # Download comprehensive compliance report
-    if results.get('compliance_summary'):
-        create_download_link(
-            results['compliance_summary'],
-            f"compliance_analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-            'json'
-        )
+                with st.expander(f"📊 {agent_key.replace('_', ' ').title()} ({agent_info.get('cbuae_article', 'Unknown')})", expanded=False):
+                    col1, col2, col3 = st.columns([2, 1, 1])
+
+                    with col1:
+                        st.markdown(f"**Category:** {category}")
+                        st.markdown(f"**Status:** {'✅ Success' if agent_result.get('success') else '❌ Failed'}")
+
+                        if agent_result.get('success'):
+                            st.markdown(f"**Accounts Processed:** {agent_result.get('accounts_processed', 0):,}")
+                            st.markdown(f"**Violations Found:** {agent_result.get('violations_found', 0):,}")
+                            st.markdown(f"**Actions Generated:** {agent_result.get('actions_generated', 0):,}")
+
+                    with col2:
+                        # Summary button
+                        if st.button(f"📋 View Summary", key=f"comp_summary_{agent_key}"):
+                            if agent_result.get('compliance_summary'):
+                                st.json(agent_result['compliance_summary'])
+
+                    with col3:
+                        # CSV download button
+                        if agent_key in csv_exports and csv_exports[agent_key].get('available'):
+                            csv_data = csv_exports[agent_key]
+
+                            st.download_button(
+                                "📄 Download CSV",
+                                csv_data['csv_data'],
+                                csv_data['filename'],
+                                "text/csv",
+                                key=f"comp_download_{agent_key}",
+                                use_container_width=True
+                            )
+
+                            st.caption(f"{csv_data['records']} records ({csv_data['file_size_kb']:.1f} KB)")
+                        else:
+                            st.caption("No violations found")
 
 # ===================== REPORTS SECTION =====================
 
 def show_reports_section():
-    """Display comprehensive reports and analytics"""
-    st.markdown('<div class="section-header">📊 Comprehensive Reports & Analytics</div>', unsafe_allow_html=True)
+    """Display comprehensive reports for all agents"""
+    st.markdown('<div class="section-header">📊 Comprehensive Reports</div>', unsafe_allow_html=True)
 
-    # Executive summary
-    display_executive_summary()
-
-    # Agent status overview
-    display_agent_status_overview()
-
-    # Data flow visualization
-    display_data_flow_visualization()
-
-    # Detailed reports
-    display_detailed_reports()
-
-def display_executive_summary():
-    """Display executive summary dashboard"""
-    st.markdown("### 📈 Executive Summary")
-
-    col1, col2, col3, col4 = st.columns(4)
-
-    with col1:
-        total_records = len(st.session_state.processed_data) if st.session_state.processed_data is not None else 0
-        st.metric("📊 Total Records", f"{total_records:,}")
-
-    with col2:
-        if st.session_state.dormancy_results:
-            total_dormant = safe_getattr(st.session_state.dormancy_results, 'total_dormant_accounts_found', 0)
-            st.metric("💤 Dormant Accounts", f"{total_dormant:,}")
-        else:
-            st.metric("💤 Dormant Accounts", "N/A")
-
-    with col3:
-        if st.session_state.compliance_results:
-            total_violations = safe_getattr(st.session_state.compliance_results, 'total_violations', 0)
-            st.metric("⚠️ Compliance Violations", f"{total_violations:,}")
-        else:
-            st.metric("⚠️ Compliance Violations", "N/A")
-
-    with col4:
-        available_agents = sum(AGENTS_STATUS.values())
-        st.metric("🤖 Available Agents", f"{available_agents}/32")
-
-def display_agent_status_overview():
-    """Display comprehensive agent status table for all 28 agents"""
-    st.markdown("### 🤖 Agent Status Overview (28 Total Agents)")
-
-    agent_data = []
-
-    # Data processing agents (4 agents)
-    data_agents = [
-        ('Data Upload', 'Data Processing', AGENTS_STATUS['data_upload']),
-        ('Data Quality', 'Data Processing', AGENTS_STATUS['data_quality']),
-        ('Data Mapping', 'Data Processing', AGENTS_STATUS['data_mapping']),
-        ('BGE Embeddings', 'Data Processing', AGENTS_STATUS['bge_embeddings'])
-    ]
-
-    for name, category, available in data_agents:
-        records_processed = 0
-        status = "Available" if available else "Not Available"
-
-        if name == "Data Quality" and st.session_state.quality_results:
-            records_processed = len(st.session_state.uploaded_data) if st.session_state.uploaded_data is not None else 0
-            status = "Completed"
-
-        agent_data.append({
-            'Agent': name,
-            'Category': category,
-            'Records Processed': f"{records_processed:,}",
-            'Status': status,
-            'Actions': 'Download Results' if records_processed > 0 else 'Available'
-        })
-
-    # Dormancy agents (11 agents) - organized by category
-    dormancy_categories = {
-        'Primary Detection': [
-            'Demand Deposit Dormancy', 'Fixed Deposit Dormancy', 'Investment Account Dormancy',
-            'Safe Deposit Box Dormancy', 'Unclaimed Payment Instruments'
-        ],
-        'Process & Transfer': [
-            'CB Transfer Eligibility', 'Article 3 Process Required', 'Contact Attempts Needed'
-        ],
-        'Specialized Analysis': [
-            'High Value Dormant Accounts', 'Dormant to Active Transitions'
-        ],
-        'Master Orchestrator': [
-            'Comprehensive Dormancy Analysis'
-        ]
-    }
-
-    for category, agent_names in dormancy_categories.items():
-        for agent_name in agent_names:
-            records_processed = 0
-            status = "Available" if AGENTS_STATUS['dormancy'] else "Not Available"
-
-            if st.session_state.dormancy_results:
-                agent_results = st.session_state.dormancy_results.get('agent_results', {})
-                snake_name = agent_name.lower().replace(' ', '_')
-                if snake_name in agent_results:
-                    records_processed = agent_results[snake_name].get('dormant_records_found', 0)
-                    status = "Completed"
-
-            agent_data.append({
-                'Agent': agent_name,
-                'Category': f'Dormancy - {category}',
-                'Records Processed': f"{records_processed:,}",
-                'Status': status,
-                'Actions': 'Download Results' if records_processed > 0 else 'Available'
-            })
-
-    # Compliance agents (17 agents) - organized by category
-    compliance_categories = {
-        'Contact & Communication': [
-            'Incomplete Contact Attempts', 'Unflagged Dormant Candidates'
-        ],
-        'Process Management': [
-            'Internal Ledger Candidates', 'Statement Freeze Candidates', 'CBUAE Transfer Candidates'
-        ],
-        'Specialized Compliance': [
-            'Foreign Currency Conversion', 'SDB Court Application',
-            'Unclaimed Instruments Ledger', 'Claim Processing Pending'
-        ],
-        'Reporting & Retention': [
-            'Annual CBUAE Report', 'Record Retention Compliance'
-        ],
-        'Utility': [
-            'Flag Instructions Logger', 'Flag Candidates Detection', 'Ledger Candidates Detection',
-            'Freeze Candidates Detection', 'CB Transfer Candidates Detection'
-        ],
-        'Master Orchestrator': [
-            'Comprehensive Compliance Analysis'
-        ]
-    }
-
-    for category, agent_names in compliance_categories.items():
-        for agent_name in agent_names:
-            violations_found = 0
-            status = "Available" if AGENTS_STATUS['compliance'] else "Not Available"
-
-            if st.session_state.compliance_results:
-                snake_name = agent_name.lower().replace(' ', '_')
-                if snake_name in st.session_state.compliance_results:
-                    violations_found = st.session_state.compliance_results[snake_name].get('violations_found', 0)
-                    status = "Completed"
-
-            agent_data.append({
-                'Agent': agent_name,
-                'Category': f'Compliance - {category}',
-                'Records Processed': f"{violations_found:,}",
-                'Status': status,
-                'Actions': 'Download Actions' if violations_found > 0 else 'Available'
-            })
-
-    # Create summary
-    st.markdown(f"#### 📊 Agent Summary")
-    col1, col2, col3, col4 = st.columns(4)
-
-    with col1:
-        st.metric("📤 Data Processing", "4 agents")
-    with col2:
-        st.metric("💤 Dormancy Analysis", "11 agents")
-    with col3:
-        st.metric("⚖️ Compliance Verification", "17 agents")
-    with col4:
-        total_available = sum(1 for item in agent_data if item['Status'] in ['Available', 'Completed'])
-        st.metric("✅ Total Available", f"{total_available}/32")
-
-    # Display comprehensive table
-    agent_df = pd.DataFrame(agent_data)
-    st.dataframe(agent_df, use_container_width=True, height=800)
-
-def display_data_flow_visualization():
-    """Display data flow visualization"""
-    st.markdown("### 🔄 Data Processing Flow")
-
-    flow_steps = [
-        "📤 Data Upload (4 Methods)",
-        "🔍 Data Quality Analysis",
-        "🗺️ BGE-Powered Column Mapping",
-        "💤 Dormancy Analysis (11 Agents)",
-        "⚖️ Compliance Verification (17 Agents)",
-        "📊 Reports & Downloads"
-    ]
-
-    col1, col2, col3 = st.columns([1, 2, 1])
-
-    with col2:
-        for i, step in enumerate(flow_steps):
-            st.markdown(f"**{i+1}.** {step}")
-            if i < len(flow_steps) - 1:
-                st.markdown("&nbsp;&nbsp;&nbsp;&nbsp;⬇️")
-
-        st.success("✅ End-to-end CBUAE compliance workflow")
-
-def display_detailed_reports():
-    """Display detailed reports section"""
-    st.markdown("### 📋 Detailed Reports")
-
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Data Summary", "💤 Dormancy Report", "⚖️ Compliance Report", "🔄 Processing Log"])
-
-    with tab1:
-        if st.session_state.uploaded_data is not None:
-            display_data_summary_report()
-        else:
-            st.info("📊 Upload data to generate summary report")
-
-    with tab2:
-        if st.session_state.dormancy_results:
-            display_dormancy_detailed_report()
-        else:
-            st.info("💤 Run dormancy analysis to generate report")
-
-    with tab3:
-        if st.session_state.compliance_results:
-            display_compliance_detailed_report()
-        else:
-            st.info("⚖️ Run compliance analysis to generate report")
-
-    with tab4:
-        display_processing_log()
-
-def display_data_summary_report():
-    """Display detailed data summary report"""
-    original_data = st.session_state.uploaded_data
-    processed_data = st.session_state.processed_data
-
-    st.markdown("#### 📊 Data Overview")
-
-    # Show both original and processed data stats
+    # Summary dashboard
     col1, col2 = st.columns(2)
 
     with col1:
-        st.markdown("**📤 Original Dataset:**")
-        st.write(f"• Total Records: {len(original_data):,}")
-        st.write(f"• Total Columns: {len(original_data.columns)}")
-        st.write(f"• Memory Usage: {original_data.memory_usage(deep=True).sum() / 1024 / 1024:.1f} MB")
-        st.write(f"• Upload Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        st.markdown("#### 💤 Dormancy Analysis Summary")
+        if st.session_state.dormancy_results:
+            dormancy_summary = st.session_state.dormancy_results.get('summary', {})
+
+            metrics = {
+                "Total Accounts": dormancy_summary.get('total_accounts_analyzed', 0),
+                "Dormant Found": dormancy_summary.get('total_dormant_accounts_found', 0),
+                "Agents Executed": dormancy_summary.get('agents_executed', 0),
+                "CSV Files": dormancy_summary.get('csv_exports_available', 0)
+            }
+
+            for metric, value in metrics.items():
+                st.metric(metric, f"{value:,}")
+        else:
+            st.info("No dormancy analysis results available")
 
     with col2:
-        if processed_data is not None:
-            st.markdown("**⚙️ Processed Dataset:**")
-            st.write(f"• Total Records: {len(processed_data):,}")
-            st.write(f"• Total Columns: {len(processed_data.columns)}")
-            st.write(f"• Memory Usage: {processed_data.memory_usage(deep=True).sum() / 1024 / 1024:.1f} MB")
+        st.markdown("#### ⚖️ Compliance Analysis Summary")
+        if st.session_state.compliance_results:
+            compliance_summary = st.session_state.compliance_results.get('compliance_summary', {})
 
-            # Show mapping information using safe_getattr
-            if st.session_state.mapping_results:
-                mappings = safe_getattr(st.session_state.mapping_results, 'mappings', {})
-                mapped_fields = len([col for col in processed_data.columns if col in get_comprehensive_banking_schema().keys()])
-                st.write(f"• Mapped Fields: {mapped_fields}/{len(processed_data.columns)}")
-                st.write(f"• CBUAE Schema Coverage: {(mapped_fields/66)*100:.1f}%")
+            metrics = {
+                "Total Violations": compliance_summary.get('total_violations_found', 0),
+                "Actions Generated": compliance_summary.get('total_actions_generated', 0),
+                "Risk Level": compliance_summary.get('regulatory_risk_level', 'Unknown'),
+                "Agents Executed": compliance_summary.get('agents_executed', 0)
+            }
+
+            for metric, value in metrics.items():
+                if isinstance(value, int):
+                    st.metric(metric, f"{value:,}")
+                else:
+                    st.metric(metric, str(value))
         else:
-            st.markdown("**⚙️ Processed Dataset:**")
-            st.write("• No processed data available")
-            st.write("• Please complete column mapping")
+            st.info("No compliance analysis results available")
 
-    # Quality information using safe_getattr
-    if st.session_state.quality_results:
-        st.markdown("#### 📈 Data Quality Metrics")
-        quality = st.session_state.quality_results
+    # Detailed agent breakdown
+    st.markdown("---")
+    st.markdown("#### 🤖 All Agents Overview")
 
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            overall_score = safe_getattr(quality, 'overall_score', 0)
-            st.write(f"• Overall Score: {overall_score:.1f}%")
-        with col2:
-            missing_percentage = safe_getattr(quality, 'missing_percentage', 0)
-            st.write(f"• Missing Data: {missing_percentage:.1f}%")
-        with col3:
-            quality_level = safe_getattr(quality, 'quality_level', 'unknown')
-            st.write(f"• Quality Level: {str(quality_level).upper()}")
-
-    # Show column transformation if mapping exists using safe_getattr
-    if st.session_state.mapping_results and processed_data is not None:
-        with st.expander("🔄 Column Transformation Details"):
-            mappings = safe_getattr(st.session_state.mapping_results, 'mappings', {})
-
-            if mappings:
-                transformation_data = []
-                for original_col, mapped_col in mappings.items():
-                    schema_info = get_schema_field_info(mapped_col) if mapped_col else {}
-                    transformation_data.append({
-                        'Original Column': original_col,
-                        'Mapped To': mapped_col or 'Not Mapped',
-                        'Type': schema_info.get('type', 'unknown'),
-                        'Required': '🔴 Yes' if schema_info.get('required', False) else '🟡 No'
-                    })
-
-                transform_df = pd.DataFrame(transformation_data)
-                st.dataframe(transform_df, use_container_width=True)
-
-def display_dormancy_detailed_report():
-    """Display detailed dormancy analysis report"""
-    results = st.session_state.dormancy_results
-
-    st.markdown("#### 💤 Dormancy Analysis Details")
-
-    # Use safe_getattr for consistent access
-    agent_results = safe_getattr(results, 'agent_results', {})
-
-    if agent_results:
-        # Create detailed breakdown
-        agent_breakdown = []
-        for agent_name, agent_result in agent_results.items():
-            dormant_found = safe_getattr(agent_result, 'dormant_records_found', 0)
-            if dormant_found > 0:
-                agent_breakdown.append({
-                    'Agent': agent_name.replace('_', ' ').title(),
-                    'Records Processed': safe_getattr(agent_result, 'records_processed', 0),
-                    'Dormant Found': dormant_found,
-                    'Processing Time (s)': f"{safe_getattr(agent_result, 'processing_time', 0):.2f}",
-                    'Success': '✅' if safe_getattr(agent_result, 'success', False) else '❌'
-                })
-
-        if agent_breakdown:
-            st.dataframe(pd.DataFrame(agent_breakdown), use_container_width=True)
+    if st.session_state.dormancy_results or st.session_state.compliance_results:
+        create_agent_overview_table()
     else:
-        st.info("No detailed agent results available")
+        st.info("Please run dormancy and compliance analysis to view detailed reports")
 
-def display_compliance_detailed_report():
-    """Display detailed compliance analysis report"""
-    results = st.session_state.compliance_results
+def create_agent_overview_table():
+    """Create comprehensive table showing all agents and their results"""
+    all_agents_data = []
 
-    st.markdown("#### ⚖️ Compliance Analysis Details")
+    # Add dormancy agents
+    if st.session_state.dormancy_results:
+        dormancy_agents = st.session_state.dormancy_results.get('agent_results', {})
+        for agent_key, result in dormancy_agents.items():
+            all_agents_data.append({
+                'Agent Name': agent_key.replace('_', ' ').title(),
+                'Type': 'Dormancy',
+                'Accounts Processed': result.get('records_processed', 0),
+                'Issues Found': result.get('dormant_records_found', 0),
+                'Processing Time (s)': result.get('processing_time', 0),
+                'Status': '✅ Success' if result.get('success') else '❌ Failed',
+                'CSV Available': '✅' if agent_key in st.session_state.dormancy_results.get('csv_exports', {}) else '❌'
+            })
 
-    # Use safe_getattr for consistent access
-    compliance_summary = safe_getattr(results, 'compliance_summary', {})
+    # Add compliance agents
+    if st.session_state.compliance_results:
+        compliance_agents = st.session_state.compliance_results.get('agent_results', {})
+        for agent_key, result in compliance_agents.items():
+            all_agents_data.append({
+                'Agent Name': agent_key.replace('_', ' ').title(),
+                'Type': 'Compliance',
+                'Accounts Processed': result.get('accounts_processed', 0),
+                'Issues Found': result.get('violations_found', 0),
+                'Processing Time (s)': result.get('processing_time', 0),
+                'Status': '✅ Success' if result.get('success') else '❌ Failed',
+                'CSV Available': '✅' if agent_key in st.session_state.compliance_results.get('csv_exports', {}) else '❌'
+            })
 
-    # Display compliance summary if available
-    if compliance_summary:
+    if all_agents_data:
+        agents_df = pd.DataFrame(all_agents_data)
+
+        # Display filterable table
         col1, col2 = st.columns(2)
         with col1:
-            total_analyzed = safe_getattr(compliance_summary, 'total_accounts_analyzed', 0)
-            total_violations = safe_getattr(compliance_summary, 'total_violations_found', 0)
-            st.write(f"• Total Accounts Analyzed: {total_analyzed:,}")
-            st.write(f"• Total Violations Found: {total_violations:,}")
+            type_filter = st.selectbox("Filter by Type:", ["All", "Dormancy", "Compliance"])
         with col2:
-            total_actions = safe_getattr(compliance_summary, 'total_actions_generated', 0)
-            processing_time = safe_getattr(compliance_summary, 'processing_time', 0)
-            st.write(f"• Total Actions Generated: {total_actions:,}")
-            st.write(f"• Processing Time: {processing_time:.2f}s")
-    else:
-        st.info("No detailed compliance summary available")
+            status_filter = st.selectbox("Filter by Status:", ["All", "Success", "Failed"])
 
-def display_processing_log():
-    """Display processing activity log"""
-    st.markdown("#### 🔄 Processing Activity Log")
+        # Apply filters
+        filtered_df = agents_df.copy()
+        if type_filter != "All":
+            filtered_df = filtered_df[filtered_df['Type'] == type_filter]
+        if status_filter != "All":
+            status_value = '✅ Success' if status_filter == 'Success' else '❌ Failed'
+            filtered_df = filtered_df[filtered_df['Status'] == status_value]
 
-    # Create activity log
-    activities = []
+        st.dataframe(filtered_df, use_container_width=True, hide_index=True)
 
-    if st.session_state.uploaded_data is not None:
-        activities.append({
-            'Timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'Activity': 'Data Upload',
-            'Status': '✅ Completed',
-            'Records': len(st.session_state.uploaded_data)
-        })
+        # Summary statistics
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Agents", len(filtered_df))
+        with col2:
+            st.metric("Total Issues Found", filtered_df['Issues Found'].sum())
+        with col3:
+            success_rate = (filtered_df['Status'] == '✅ Success').mean() * 100
+            st.metric("Success Rate", f"{success_rate:.1f}%")
 
-    if st.session_state.quality_results:
-        activities.append({
-            'Timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'Activity': 'Quality Analysis',
-            'Status': '✅ Completed',
-            'Records': len(st.session_state.uploaded_data) if st.session_state.uploaded_data is not None else 0
-        })
-
-    if st.session_state.mapping_results:
-        # Use safe_getattr to handle both dict and dataclass formats
-        mappings = safe_getattr(st.session_state.mapping_results, 'mappings', {})
-        activities.append({
-            'Timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'Activity': 'Column Mapping',
-            'Status': '✅ Completed',
-            'Records': len(mappings) if mappings else 0
-        })
-
-    if st.session_state.dormancy_results:
-        total_dormant = safe_getattr(st.session_state.dormancy_results, 'total_dormant_accounts_found', 0)
-        activities.append({
-            'Timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'Activity': 'Dormancy Analysis',
-            'Status': '✅ Completed',
-            'Records': total_dormant
-        })
-
-    if st.session_state.compliance_results:
-        total_violations = safe_getattr(st.session_state.compliance_results, 'total_violations', 0)
-        activities.append({
-            'Timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'Activity': 'Compliance Analysis',
-            'Status': '✅ Completed',
-            'Records': total_violations
-        })
-
-    if activities:
-        st.dataframe(pd.DataFrame(activities), use_container_width=True)
-    else:
-        st.info("📝 No processing activities recorded yet")
-
-# ===================== SIDEBAR AND NAVIGATION =====================
+# ===================== SIDEBAR NAVIGATION =====================
 
 def show_sidebar():
-    """Display sidebar navigation and status"""
-    st.sidebar.markdown(f"### 👋 Welcome, {st.session_state.username}!")
+    """Display sidebar navigation"""
+    with st.sidebar:
+        st.markdown("### 🏛️ CBUAE Compliance System")
+        st.markdown(f"**User:** {st.session_state.username}")
+        st.markdown("---")
 
-    # Navigation
-    st.sidebar.markdown("### 🧭 Navigation")
-    pages = {
-        'data_processing': '📤 Data Processing',
-        'dormancy_analysis': '💤 Dormancy Analysis',
-        'compliance_verification': '⚖️ Compliance Verification',
-        'reports': '📊 Reports & Analytics'
-    }
+        # Navigation menu
+        pages = {
+            "📤 Data Processing": "data_processing",
+            "💤 Dormancy Analysis": "dormancy_analysis",
+            "⚖️ Compliance Verification": "compliance_verification",
+            "📊 Reports": "reports"
+        }
 
-    for page_key, page_name in pages.items():
-        if st.sidebar.button(page_name, use_container_width=True):
-            st.session_state.current_page = page_key
-            st.rerun()
+        for page_name, page_key in pages.items():
+            if st.button(page_name, use_container_width=True):
+                st.session_state.current_page = page_key
+                st.rerun()
 
-    # Debug Mode (single location to avoid conflicts)
-    st.sidebar.markdown("### 🔍 Debug Mode")
-    debug_mode = st.sidebar.checkbox("Enable Debug Info", key="global_debug_mode")
+        st.markdown("---")
 
-    if debug_mode:
-        st.sidebar.markdown("#### 📊 Session State Info")
-        st.sidebar.write(f"**Username:** {st.session_state.username}")
-        st.sidebar.write(f"**Session ID:** {st.session_state.agent_session_id or 'None'}")
+        # System status
+        st.markdown("### 🔧 System Status")
 
+        status_indicators = {
+            "Data Processing": DATA_PROCESSING_AVAILABLE,
+            "Dormancy Agents": DORMANCY_AGENTS_AVAILABLE,
+            "Compliance Agents": COMPLIANCE_AGENTS_AVAILABLE
+        }
+
+        for system, available in status_indicators.items():
+            status = "🟢 Available" if available else "🔴 Unavailable"
+            st.markdown(f"**{system}:** {status}")
+
+        st.markdown("---")
+
+        # Data status
         if st.session_state.uploaded_data is not None:
-            st.sidebar.write(f"**Data Shape:** {st.session_state.uploaded_data.shape}")
+            st.markdown("### 📊 Data Status")
+            st.markdown(f"**Shape:** {st.session_state.uploaded_data.shape}")
+            st.markdown(f"**Columns:** {len(st.session_state.uploaded_data.columns)}")
 
-        if st.session_state.quality_results:
-            st.sidebar.write(f"**Quality Results Type:** {type(st.session_state.quality_results).__name__}")
+            if st.session_state.data_quality_results:
+                quality = st.session_state.data_quality_results
+                st.markdown(f"**Quality:** {quality.quality_level.title()}")
+                st.markdown(f"**Score:** {quality.overall_score:.1%}")
 
-        if st.session_state.mapping_results:
-            st.sidebar.write(f"**Mapping Results Type:** {type(st.session_state.mapping_results).__name__}")
+        st.markdown("---")
 
-    # System status
-    st.sidebar.markdown("### 🔧 System Status")
-
-    # Agent status indicators
-    agent_status_display = {
-        'unified_data_processing': '📤 Data Processing',
-        'dormancy': '💤 Dormancy Agents',
-        'compliance': '⚖️ Compliance Agents'
-    }
-
-    for agent_key, agent_name in agent_status_display.items():
-        status = "🟢 Available" if AGENTS_STATUS[agent_key] else "🔴 Unavailable"
-        st.sidebar.markdown(f"{agent_name}: {status}")
-
-    # Session information
-    st.sidebar.markdown("### ℹ️ Session Info")
-    st.sidebar.markdown(f"**Session ID:** `{st.session_state.agent_session_id or 'Not started'}`")
-    st.sidebar.markdown(f"**Login Time:** `{datetime.now().strftime('%H:%M:%S')}`")
-
-    # Logout button
-    if st.sidebar.button("🚪 Logout", use_container_width=True):
-        # Clear session state
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
-        st.rerun()
+        # Logout
+        if st.button("🚪 Logout", use_container_width=True):
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.rerun()
 
 # ===================== MAIN APPLICATION =====================
 
 def main():
-    """Main application entry point"""
+    """Main application function"""
+    initialize_session_state()
 
-    # Check if user is logged in
+    # Check authentication
     if not st.session_state.logged_in:
         show_login_page()
         return
@@ -2889,19 +1086,19 @@ def main():
     # Show sidebar
     show_sidebar()
 
-    # Display main content based on current page
-    page = st.session_state.get('current_page', 'data_processing')
-
-    if page == 'data_processing':
+    # Main content area
+    if st.session_state.current_page == 'data_processing':
         show_data_processing_section()
-    elif page == 'dormancy_analysis':
+    elif st.session_state.current_page == 'dormancy_analysis':
         show_dormancy_analysis_section()
-    elif page == 'compliance_verification':
+    elif st.session_state.current_page == 'compliance_verification':
         show_compliance_analysis_section()
-    elif page == 'reports':
+    elif st.session_state.current_page == 'reports':
         show_reports_section()
     else:
-        show_data_processing_section()  # Default to data processing
+        # Default to data processing
+        st.session_state.current_page = 'data_processing'
+        show_data_processing_section()
 
 if __name__ == "__main__":
     main()
