@@ -1477,4 +1477,4 @@ if __name__ == "__main__":
     print("- Mock tool implementations")
 
     # Uncomment to run example
-    # asyncio.run(main())
+    # asyncio.run(main())redis ping
