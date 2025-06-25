@@ -1,5 +1,6 @@
 """
 Unified Data Processing Agent for Banking Compliance Analysis
+FIXED VERSION - Critical issues resolved
 Integrates: Data Upload (4 methods), Quality Analysis, BGE Mapping, and Memory Management
 """
 
@@ -22,6 +23,10 @@ from enum import Enum
 from pathlib import Path
 from urllib.parse import urlparse
 
+# Configure logging FIRST
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 # BGE and similarity imports
 try:
     from sentence_transformers import SentenceTransformer
@@ -29,7 +34,7 @@ try:
     BGE_AVAILABLE = True
 except ImportError:
     BGE_AVAILABLE = False
-    logging.warning("BGE dependencies not available. Install sentence-transformers and scikit-learn")
+    logger.warning("BGE dependencies not available. Install sentence-transformers and scikit-learn")
 
 # Cloud storage imports
 try:
@@ -41,17 +46,70 @@ try:
     CLOUD_DEPENDENCIES_AVAILABLE = True
 except ImportError:
     CLOUD_DEPENDENCIES_AVAILABLE = False
-    logging.warning("Cloud dependencies not available for some upload methods")
+    logger.warning("Cloud dependencies not available for some upload methods")
 
-# Memory agent imports
+# Memory agent imports with FIXED fallback
+MEMORY_AGENT_AVAILABLE = False
+HybridMemoryAgent = None
+MemoryContext = None
+MemoryBucket = None
+MemoryPriority = None
 
-from agents.memory_agent import HybridMemoryAgent, MemoryContext, MemoryBucket, MemoryPriority
-MEMORY_AGENT_AVAILABLE = True
+try:
+    # Try enhanced memory agent first
+    from memory_agent_streamlit_fix import (
+        HybridMemoryAgent,
+        MemoryContext,
+        MemoryBucket,
+        MemoryPriority,
+        create_streamlit_memory_agent
+    )
+    MEMORY_AGENT_AVAILABLE = True
+    logger.info("✅ Enhanced Memory Agent imported successfully")
+except ImportError as e:
+    try:
+        # Try standard memory agent
+        from agents.memory_agent import HybridMemoryAgent, MemoryContext, MemoryBucket, MemoryPriority
+        MEMORY_AGENT_AVAILABLE = True
+        logger.info("✅ Standard Memory Agent imported successfully")
+    except ImportError as e2:
+        # Create FIXED dummy classes
+        class DummyMemoryAgent:
+            def __init__(self, *args, **kwargs):
+                self.config = kwargs.get('config', {})
 
+            async def store_memory(self, *args, **kwargs):
+                return {"success": False, "error": "Memory agent not available"}
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+            async def retrieve_memory(self, *args, **kwargs):
+                return {"success": False, "error": "Memory agent not available"}
+
+            async def create_memory_context(self, *args, **kwargs):
+                return DummyMemoryContext()
+
+            def get_statistics(self):
+                return {"status": "unavailable"}
+
+        class DummyMemoryContext:
+            def __init__(self):
+                self.user_id = "dummy"
+                self.session_id = "dummy"
+
+        class DummyMemoryBucket:
+            KNOWLEDGE = "knowledge"
+            SESSION = "session"
+            CACHE = "cache"
+
+        class DummyMemoryPriority:
+            HIGH = "high"
+            MEDIUM = "medium"
+            LOW = "low"
+
+        HybridMemoryAgent = DummyMemoryAgent
+        MemoryContext = DummyMemoryContext
+        MemoryBucket = DummyMemoryBucket
+        MemoryPriority = DummyMemoryPriority
+        logger.warning(f"Using dummy memory implementation: {e2}")
 
 
 class ProcessingStatus(Enum):
@@ -147,12 +205,18 @@ class UnifiedDataProcessingAgent:
         self.memory_agent = None
         if MEMORY_AGENT_AVAILABLE and self.config.get("enable_memory", True):
             try:
-                from mcp_client import MCPClient
-                mcp_client = MCPClient()
-                self.memory_agent = HybridMemoryAgent(mcp_client, self.config.get("memory_config", {}))
+                # Try to import MCP client
+                try:
+                    from mcp_client import MCPClient
+                    mcp_client = MCPClient()
+                    self.memory_agent = HybridMemoryAgent(mcp_client, self.config.get("memory_config", {}))
+                except ImportError:
+                    # Create without MCP client
+                    self.memory_agent = HybridMemoryAgent(None, self.config.get("memory_config", {}))
                 logger.info("✅ Memory agent initialized")
             except Exception as e:
                 logger.warning(f"Memory agent initialization failed: {e}")
+                self.memory_agent = HybridMemoryAgent(None, {})
 
         # Initialize BGE model for semantic mapping
         self.bge_model = None
@@ -717,38 +781,28 @@ class UnifiedDataProcessingAgent:
             'exclusion_reason': ['exclusion', 'reason', 'exclusion_reason', 'excluded']
         }
 
-
     # =================== DATA UPLOAD METHODS ===================
 
     async def upload_data(self, upload_method: str, source: Union[str, io.IOBase],
                          user_id: str, session_id: str, **kwargs) -> UploadResult:
-        """
-        Main upload method supporting 4 different data sources
-
-        Args:
-            upload_method: 'file', 'drive', 'datalake', or 'hdfs'
-            source: File path, URL, file object, or identifier
-            user_id: User identifier for memory management
-            session_id: Session identifier
-            **kwargs: Additional parameters specific to each method
-
-        Returns:
-            UploadResult object with data and metadata
-        """
+        """Main upload method supporting 4 different data sources"""
         start_time = datetime.now()
 
         try:
             logger.info(f"Starting upload via {upload_method}: {str(source)[:100]}")
 
-            # Create memory context
+            # Create memory context with SAFE access
             memory_context = None
-            if self.memory_agent:
-                memory_context = await self.memory_agent.create_memory_context(
-                    user_id=user_id,
-                    session_id=session_id,
-                    agent_name="unified_data_processing",
-                    workflow_stage="data_upload"
-                )
+            if self.memory_agent and MEMORY_AGENT_AVAILABLE:
+                try:
+                    memory_context = await self.memory_agent.create_memory_context(
+                        user_id=user_id,
+                        session_id=session_id,
+                        agent_name="unified_data_processing",
+                        workflow_stage="data_upload"
+                    )
+                except Exception as e:
+                    logger.warning(f"Memory context creation failed: {e}")
 
             # Load previous upload patterns from memory
             upload_patterns = await self._load_upload_patterns(memory_context)
@@ -772,9 +826,12 @@ class UnifiedDataProcessingAgent:
             processing_time = (datetime.now() - start_time).total_seconds()
             result.processing_time = processing_time
 
-            # Store upload results in memory
-            if result.success and self.memory_agent:
-                await self._store_upload_results(result, memory_context, upload_method)
+            # Store upload results in memory (SAFE)
+            if result.success and self.memory_agent and MEMORY_AGENT_AVAILABLE:
+                try:
+                    await self._store_upload_results(result, memory_context, upload_method)
+                except Exception as e:
+                    logger.warning(f"Failed to store upload results: {e}")
 
             # Update statistics
             self.stats["uploads_processed"] += 1
@@ -1242,18 +1299,7 @@ class UnifiedDataProcessingAgent:
 
     async def analyze_data_quality(self, data: pd.DataFrame, user_id: str,
                                   session_id: str, **kwargs) -> QualityResult:
-        """
-        Comprehensive data quality analysis
-
-        Args:
-            data: DataFrame to analyze
-            user_id: User identifier for memory management
-            session_id: Session identifier
-            **kwargs: Additional options
-
-        Returns:
-            QualityResult with quality metrics and recommendations
-        """
+        """Comprehensive data quality analysis"""
         start_time = datetime.now()
 
         try:
@@ -1262,15 +1308,18 @@ class UnifiedDataProcessingAgent:
 
             logger.info(f"Analyzing data quality for {len(data)} records, {len(data.columns)} columns")
 
-            # Create memory context
+            # Create memory context SAFELY
             memory_context = None
-            if self.memory_agent:
-                memory_context = await self.memory_agent.create_memory_context(
-                    user_id=user_id,
-                    session_id=session_id,
-                    agent_name="unified_data_processing",
-                    workflow_stage="quality_analysis"
-                )
+            if self.memory_agent and MEMORY_AGENT_AVAILABLE:
+                try:
+                    memory_context = await self.memory_agent.create_memory_context(
+                        user_id=user_id,
+                        session_id=session_id,
+                        agent_name="unified_data_processing",
+                        workflow_stage="quality_analysis"
+                    )
+                except Exception as e:
+                    logger.warning(f"Memory context creation failed: {e}")
 
             # Load quality benchmarks from memory
             quality_benchmarks = await self._load_quality_benchmarks(memory_context)
@@ -1331,9 +1380,12 @@ class UnifiedDataProcessingAgent:
                 processing_time=processing_time
             )
 
-            # Store quality results in memory
-            if self.memory_agent:
-                await self._store_quality_results(result, memory_context, data)
+            # Store quality results in memory SAFELY
+            if self.memory_agent and MEMORY_AGENT_AVAILABLE:
+                try:
+                    await self._store_quality_results(result, memory_context, data)
+                except Exception as e:
+                    logger.warning(f"Failed to store quality results: {e}")
 
             # Update statistics
             self.stats["quality_analyses"] += 1
@@ -1475,61 +1527,53 @@ class UnifiedDataProcessingAgent:
 
     async def map_columns(self, data: pd.DataFrame, user_id: str, session_id: str,
                          use_llm: bool = False, llm_api_key: Optional[str] = None, **kwargs) -> MappingResult:
-        """
-        Map data columns to banking schema using BGE embeddings and cosine similarity
-
-        Args:
-            data: DataFrame to map
-            user_id: User identifier for memory management
-            session_id: Session identifier
-            use_llm: Whether to use LLM for enhanced mapping
-            llm_api_key: API key for LLM service (optional)
-            **kwargs: Additional options
-
-        Returns:
-            MappingResult with column mappings and confidence scores
-        """
+        """Map data columns to banking schema using BGE embeddings and cosine similarity"""
         start_time = datetime.now()
 
         try:
             if data.empty:
                 return MappingResult(success=False, error="Data is empty")
 
-            if not BGE_AVAILABLE:
-                return MappingResult(success=False, error="BGE dependencies not available")
+            logger.info(f"Mapping {len(data.columns)} columns using {'BGE' if self.bge_model else 'keyword'} mapping")
 
-            if not self.bge_model:
-                return MappingResult(success=False, error="BGE model not loaded")
-
-            logger.info(f"Mapping {len(data.columns)} columns using BGE embeddings")
-
-            # Create memory context
+            # Create memory context SAFELY
             memory_context = None
-            if self.memory_agent:
-                memory_context = await self.memory_agent.create_memory_context(
-                    user_id=user_id,
-                    session_id=session_id,
-                    agent_name="unified_data_processing",
-                    workflow_stage="column_mapping"
-                )
+            if self.memory_agent and MEMORY_AGENT_AVAILABLE:
+                try:
+                    memory_context = await self.memory_agent.create_memory_context(
+                        user_id=user_id,
+                        session_id=session_id,
+                        agent_name="unified_data_processing",
+                        workflow_stage="column_mapping"
+                    )
+                except Exception as e:
+                    logger.warning(f"Memory context creation failed: {e}")
 
             # Load mapping patterns from memory
             mapping_patterns = await self._load_mapping_patterns(memory_context)
 
-            # Perform BGE-based semantic mapping
-            mappings = await self._perform_bge_mapping(data.columns.tolist())
+            # Perform mapping
+            mappings = {}
+            method = "Keyword-based"
+
+            if BGE_AVAILABLE and self.bge_model:
+                try:
+                    # Perform BGE-based semantic mapping
+                    mappings = await self._perform_bge_mapping(data.columns.tolist())
+                    method = "BGE Semantic"
+                except Exception as e:
+                    logger.warning(f"BGE mapping failed, falling back to keyword: {e}")
 
             # Apply keyword-based mapping as fallback
-            keyword_mappings = await self._perform_keyword_mapping(data.columns.tolist())
-
-            # Merge mappings (BGE takes priority)
-            final_mappings = {**keyword_mappings, **mappings}
+            if not mappings:
+                mappings = await self._perform_keyword_mapping(data.columns.tolist())
+                method = "Keyword-based"
 
             # Create mapping sheet
-            mapping_sheet = await self._create_mapping_sheet(data.columns.tolist(), final_mappings)
+            mapping_sheet = await self._create_mapping_sheet(data.columns.tolist(), mappings)
 
             # Calculate statistics
-            auto_mapping_percentage = (len(final_mappings) / len(data.columns)) * 100 if len(data.columns) > 0 else 0
+            auto_mapping_percentage = (len(mappings) / len(data.columns)) * 100 if len(data.columns) > 0 else 0
 
             confidence_distribution = {
                 "high": len([m for m in mapping_sheet.to_dict('records') if m.get('Confidence_Level') == 'high']),
@@ -1540,19 +1584,18 @@ class UnifiedDataProcessingAgent:
             processing_time = (datetime.now() - start_time).total_seconds()
 
             # Enhance with LLM if requested
-            method = "BGE Semantic + Keyword"
             if use_llm and llm_api_key:
                 try:
                     enhanced_mappings = await self._enhance_with_llm(mapping_sheet, llm_api_key)
-                    if enhanced_mappings:
+                    if enhanced_mappings is not None:
                         mapping_sheet = enhanced_mappings
-                        method = "BGE + LLM Enhanced"
+                        method = f"{method} + LLM Enhanced"
                 except Exception as e:
                     logger.warning(f"LLM enhancement failed: {e}")
 
             result = MappingResult(
                 success=True,
-                mappings=final_mappings,
+                mappings=mappings,
                 mapping_sheet=mapping_sheet,
                 auto_mapping_percentage=auto_mapping_percentage,
                 method=method,
@@ -1560,9 +1603,12 @@ class UnifiedDataProcessingAgent:
                 processing_time=processing_time
             )
 
-            # Store mapping results in memory
-            if self.memory_agent:
-                await self._store_mapping_results(result, memory_context, data)
+            # Store mapping results in memory SAFELY
+            if self.memory_agent and MEMORY_AGENT_AVAILABLE:
+                try:
+                    await self._store_mapping_results(result, memory_context, data)
+                except Exception as e:
+                    logger.warning(f"Failed to store mapping results: {e}")
 
             # Update statistics
             self.stats["mappings_performed"] += 1
@@ -1581,6 +1627,9 @@ class UnifiedDataProcessingAgent:
     async def _perform_bge_mapping(self, source_columns: List[str]) -> Dict[str, str]:
         """Perform BGE-based semantic mapping"""
         try:
+            if not self.bge_model:
+                raise Exception("BGE model not available")
+
             # Prepare texts for embedding
             source_texts = [col.replace('_', ' ').lower() for col in source_columns]
             target_texts = []
@@ -1700,16 +1749,18 @@ class UnifiedDataProcessingAgent:
         logger.info("LLM enhancement requested but not implemented yet")
         return mapping_sheet
 
-    # =================== MEMORY INTEGRATION ===================
+    # =================== MEMORY INTEGRATION (SAFE) ===================
 
-    async def _load_upload_patterns(self, memory_context: Optional[MemoryContext]) -> Dict:
-        """Load upload patterns from memory"""
-        if not self.memory_agent or not memory_context:
+    async def _load_upload_patterns(self, memory_context) -> Dict:
+        """Load upload patterns from memory SAFELY"""
+        if not self.memory_agent or not memory_context or not MEMORY_AGENT_AVAILABLE:
             return {}
 
         try:
+            # Safe bucket access
+            bucket = getattr(MemoryBucket, 'KNOWLEDGE', 'knowledge')
             result = await self.memory_agent.retrieve_memory(
-                bucket=MemoryBucket.KNOWLEDGE.value,
+                bucket=bucket,
                 filter_criteria={
                     "type": "upload_patterns",
                     "user_id": memory_context.user_id
@@ -1726,14 +1777,15 @@ class UnifiedDataProcessingAgent:
             logger.warning(f"Failed to load upload patterns: {e}")
             return {}
 
-    async def _load_quality_benchmarks(self, memory_context: Optional[MemoryContext]) -> Dict:
-        """Load quality benchmarks from memory"""
-        if not self.memory_agent or not memory_context:
+    async def _load_quality_benchmarks(self, memory_context) -> Dict:
+        """Load quality benchmarks from memory SAFELY"""
+        if not self.memory_agent or not memory_context or not MEMORY_AGENT_AVAILABLE:
             return {}
 
         try:
+            bucket = getattr(MemoryBucket, 'KNOWLEDGE', 'knowledge')
             result = await self.memory_agent.retrieve_memory(
-                bucket=MemoryBucket.KNOWLEDGE.value,
+                bucket=bucket,
                 filter_criteria={
                     "type": "quality_benchmarks",
                     "user_id": memory_context.user_id
@@ -1750,14 +1802,15 @@ class UnifiedDataProcessingAgent:
             logger.warning(f"Failed to load quality benchmarks: {e}")
             return {}
 
-    async def _load_mapping_patterns(self, memory_context: Optional[MemoryContext]) -> Dict:
-        """Load mapping patterns from memory"""
-        if not self.memory_agent or not memory_context:
+    async def _load_mapping_patterns(self, memory_context) -> Dict:
+        """Load mapping patterns from memory SAFELY"""
+        if not self.memory_agent or not memory_context or not MEMORY_AGENT_AVAILABLE:
             return {}
 
         try:
+            bucket = getattr(MemoryBucket, 'KNOWLEDGE', 'knowledge')
             result = await self.memory_agent.retrieve_memory(
-                bucket=MemoryBucket.KNOWLEDGE.value,
+                bucket=bucket,
                 filter_criteria={
                     "type": "mapping_patterns",
                     "user_id": memory_context.user_id
@@ -1774,10 +1827,9 @@ class UnifiedDataProcessingAgent:
             logger.warning(f"Failed to load mapping patterns: {e}")
             return {}
 
-    async def _store_upload_results(self, result: UploadResult, memory_context: MemoryContext,
-                                   upload_method: str) -> None:
-        """Store upload results in memory"""
-        if not self.memory_agent or not result.success:
+    async def _store_upload_results(self, result: UploadResult, memory_context, upload_method: str) -> None:
+        """Store upload results in memory SAFELY"""
+        if not self.memory_agent or not result.success or not MEMORY_AGENT_AVAILABLE:
             return
 
         try:
@@ -1792,8 +1844,9 @@ class UnifiedDataProcessingAgent:
                 "timestamp": datetime.now().isoformat()
             }
 
+            bucket = getattr(MemoryBucket, 'SESSION', 'session')
             await self.memory_agent.store_memory(
-                bucket=MemoryBucket.SESSION.value,
+                bucket=bucket,
                 data=upload_data,
                 context=memory_context,
                 content_type="upload_results",
@@ -1805,10 +1858,9 @@ class UnifiedDataProcessingAgent:
         except Exception as e:
             logger.warning(f"Failed to store upload results: {e}")
 
-    async def _store_quality_results(self, result: QualityResult, memory_context: MemoryContext,
-                                    data: pd.DataFrame) -> None:
-        """Store quality results in memory"""
-        if not self.memory_agent or not result.success:
+    async def _store_quality_results(self, result: QualityResult, memory_context, data: pd.DataFrame) -> None:
+        """Store quality results in memory SAFELY"""
+        if not self.memory_agent or not result.success or not MEMORY_AGENT_AVAILABLE:
             return
 
         try:
@@ -1827,8 +1879,9 @@ class UnifiedDataProcessingAgent:
                 "timestamp": datetime.now().isoformat()
             }
 
+            session_bucket = getattr(MemoryBucket, 'SESSION', 'session')
             await self.memory_agent.store_memory(
-                bucket=MemoryBucket.SESSION.value,
+                bucket=session_bucket,
                 data=quality_data,
                 context=memory_context,
                 content_type="quality_results",
@@ -1850,12 +1903,14 @@ class UnifiedDataProcessingAgent:
                     "timestamp": datetime.now().isoformat()
                 }
 
+                knowledge_bucket = getattr(MemoryBucket, 'KNOWLEDGE', 'knowledge')
+                priority = getattr(MemoryPriority, 'HIGH', 'high')
                 await self.memory_agent.store_memory(
-                    bucket=MemoryBucket.KNOWLEDGE.value,
+                    bucket=knowledge_bucket,
                     data=knowledge_data,
                     context=memory_context,
                     content_type="quality_benchmarks",
-                    priority=MemoryPriority.HIGH,
+                    priority=priority,
                     tags=["quality", "benchmarks", "patterns"]
                 )
 
@@ -1864,10 +1919,9 @@ class UnifiedDataProcessingAgent:
         except Exception as e:
             logger.warning(f"Failed to store quality results: {e}")
 
-    async def _store_mapping_results(self, result: MappingResult, memory_context: MemoryContext,
-                                    data: pd.DataFrame) -> None:
-        """Store mapping results in memory"""
-        if not self.memory_agent or not result.success:
+    async def _store_mapping_results(self, result: MappingResult, memory_context, data: pd.DataFrame) -> None:
+        """Store mapping results in memory SAFELY"""
+        if not self.memory_agent or not result.success or not MEMORY_AGENT_AVAILABLE:
             return
 
         try:
@@ -1884,8 +1938,9 @@ class UnifiedDataProcessingAgent:
                 "timestamp": datetime.now().isoformat()
             }
 
+            session_bucket = getattr(MemoryBucket, 'SESSION', 'session')
             await self.memory_agent.store_memory(
-                bucket=MemoryBucket.SESSION.value,
+                bucket=session_bucket,
                 data=mapping_data,
                 context=memory_context,
                 content_type="mapping_results",
@@ -1904,12 +1959,14 @@ class UnifiedDataProcessingAgent:
                     "timestamp": datetime.now().isoformat()
                 }
 
+                knowledge_bucket = getattr(MemoryBucket, 'KNOWLEDGE', 'knowledge')
+                priority = getattr(MemoryPriority, 'HIGH', 'high')
                 await self.memory_agent.store_memory(
-                    bucket=MemoryBucket.KNOWLEDGE.value,
+                    bucket=knowledge_bucket,
                     data=pattern_data,
                     context=memory_context,
                     content_type="mapping_patterns",
-                    priority=MemoryPriority.HIGH,
+                    priority=priority,
                     tags=["mapping", "patterns", "successful"]
                 )
 
@@ -2136,14 +2193,6 @@ if __name__ == "__main__":
     async def main():
         # Create agent
         agent = create_unified_data_processing_agent()
-
-        # Example comprehensive processing
-        # result = await agent.process_data_comprehensive(
-        #     upload_method="file",
-        #     source="banking_data.csv",
-        #     user_id="user123",
-        #     session_id="session456"
-        # )
 
         # Print statistics
         stats = agent.get_agent_statistics()

@@ -18,6 +18,7 @@ import sqlite3
 import aiofiles
 from pathlib import Path
 import faiss
+import st
 from sentence_transformers import SentenceTransformer
 import redis.asyncio as redis
 from cryptography.fernet import Fernet
@@ -31,6 +32,7 @@ from langsmith import traceable, Client as LangSmithClient
 
 # MCP imports
 from mcp_client import MCPClient
+from utils.redis_manager import RedisManager
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -451,356 +453,53 @@ class MemoryDatabase:
         )
 
 
+# agents/memory_agent.py (Enhanced)
 class HybridMemoryAgent:
-    """Advanced hybrid memory management system"""
+    """Enhanced hybrid memory management with robust Redis"""
 
     def __init__(self, mcp_client: MCPClient, config: Dict):
         self.mcp_client = mcp_client
         self.config = config
 
-        # Initialize components
-        self.encryption = MemoryEncryption(self.config.get("encryption_key"))
-        self.database = MemoryDatabase(self.config["db_path"])
-        self.vector_store = VectorMemoryStore(
-            dimension=self.config["vector_dimension"],
-            index_path=self.config["vector_index_path"]
-        )
+        # Initialize Redis with error handling
+        self.redis_manager = RedisManager(config)
+        self.redis_client = self.redis_manager.get_client()
 
-        # Initialize Redis
-        self.redis_client = redis.Redis(
-            host=self.config["redis_host"],
-            port=self.config["redis_port"],
-            db=self.config["redis_db"],
-            decode_responses=True
-        )
+        # Fallback mode if Redis is unavailable
+        self.redis_available = self.redis_client is not None
 
-        # LangSmith client
-        self.langsmith_client = LangSmithClient()
+        if not self.redis_available:
+            st.warning("⚠️ Redis unavailable - using fallback mode")
 
-        # Memory statistics
-        self.access_stats = {
-            "total_stores": 0,
-            "total_retrievals": 0,
-            "cache_hits": 0,
-            "cache_misses": 0
-        }
+    async def store_memory_with_fallback(self, key: str, data: Dict, ttl: int = 3600):
+        """Store data with Redis fallback to SQLite"""
+        try:
+            if self.redis_available and self.redis_client:
+                # Try Redis first
+                await self.redis_client.setex(
+                    key,
+                    ttl,
+                    json.dumps(data, default=str)
+                )
+                return True
+        except Exception as e:
+            self.logger.warning(f"Redis storage failed: {e}")
+            self.redis_available = False
 
-        # Start cleanup task
-        asyncio.create_task(self._periodic_cleanup())
+        # Fallback to SQLite
+        return await self._store_in_sqlite(key, data)
 
-    @traceable(name="store_memory")
-    async def store_memory(self, bucket: str, data: Dict, context: MemoryContext = None,
-                           encrypt_sensitive: bool = False, **kwargs) -> Dict:
-        """Store data in specified memory bucket"""
-        bucket_enum = MemoryBucket(bucket)
+    async def retrieve_memory_with_fallback(self, key: str) -> Optional[Dict]:
+        """Retrieve data with Redis fallback"""
+        try:
+            if self.redis_available and self.redis_client:
+                # Try Redis first
+                cached_data = await self.redis_client.get(key)
+                if cached_data:
+                    return json.loads(cached_data)
+        except Exception as e:
+            self.logger.warning(f"Redis retrieval failed: {e}")
+            self.redis_available = False
 
-        # Generate entry ID and content hash
-        entry_id = secrets.token_hex(16)
-        content_hash = hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
-
-        # Prepare memory entry
-        now = datetime.now()
-        entry = MemoryEntry(
-            entry_id=entry_id,
-            bucket=bucket_enum,
-            user_id=context.user_id if context else kwargs.get("user_id", "system"),
-            session_id=context.session_id if context else kwargs.get("session_id"),
-            data=data,
-            content_hash=content_hash,
-            created_at=now,
-            updated_at=now,
-            accessed_at=now,
-            priority=kwargs.get("priority", MemoryPriority.MEDIUM),
-            content_type=kwargs.get("content_type", "general"),
-            tags=kwargs.get("tags", [])
-        )
-
-        # Set expiration
-        retention_policy = kwargs.get("retention_policy", bucket)
-        if retention_policy in self.config["retention_policies"]:
-            ttl = self.config["retention_policies"][retention_policy]["default_ttl"]
-            entry.expires_at = now + timedelta(seconds=ttl)
-
-        # Encrypt data if required
-        if encrypt_sensitive:
-            entry.data = {"encrypted_content": self.encryption.encrypt_data(data)}
-            entry.encrypted = True
-
-        # Store in database
-        success = self.database.store_entry(entry)
-        if not success:
-            return {"success": False, "error": "Database storage failed"}
-
-        # Add to vector store
-        if bucket_enum in [MemoryBucket.KNOWLEDGE, MemoryBucket.SESSION]:
-            text_content = self._extract_text_content(data)
-            if text_content:
-                self.vector_store.add_entry(entry_id, text_content)
-
-        # Cache in Redis
-        cache_key = f"memory:{bucket}:{entry_id}"
-        await self.redis_client.setex(
-            cache_key,
-            timedelta(minutes=30),
-            json.dumps(asdict(entry), default=str)
-        )
-
-        # Call MCP tool
-        mcp_result = await self.mcp_client.call_tool("memory_store", {
-            "bucket": bucket,
-            "entry_id": entry_id,
-            "data": data,
-            "user_id": entry.user_id,
-            "content_type": entry.content_type
-        })
-
-        self.access_stats["total_stores"] += 1
-
-        return {
-            "success": True,
-            "entry_id": entry_id,
-            "content_hash": content_hash,
-            "bucket": bucket,
-            "encrypted": entry.encrypted,
-            "expires_at": entry.expires_at.isoformat() if entry.expires_at else None
-        }
-
-    @traceable(name="retrieve_memory")
-    async def retrieve_memory(self, bucket: str, filter_criteria: Dict = None,
-                              context: MemoryContext = None, **kwargs) -> Dict:
-        """Retrieve data from specified memory bucket"""
-        bucket_enum = MemoryBucket(bucket)
-        user_id = context.user_id if context else kwargs.get("user_id", "system")
-
-        # Try cache first
-        cached_results = None
-        if filter_criteria:
-            cache_key = f"search:{bucket}:{user_id}:{hashlib.md5(str(filter_criteria).encode()).hexdigest()}"
-            cached_results = await self.redis_client.get(cache_key)
-            if cached_results:
-                self.access_stats["cache_hits"] += 1
-                return json.loads(cached_results)
-
-        self.access_stats["cache_misses"] += 1
-
-        # Search database
-        entries = self.database.search_entries(
-            bucket=bucket_enum,
-            user_id=user_id,
-            filter_criteria=filter_criteria or {},
-            limit=kwargs.get("max_results", 100)
-        )
-
-        # Semantic search if query provided
-        if context and context.search_query and bucket_enum in [MemoryBucket.KNOWLEDGE, MemoryBucket.SESSION]:
-            similar_entries = self.vector_store.search_similar(
-                query_text=context.search_query,
-                top_k=context.max_results,
-                threshold=context.similarity_threshold
-            )
-
-            # Filter entries by similarity results
-            similar_ids = {entry_id for entry_id, _ in similar_entries}
-            entries = [entry for entry in entries if entry.entry_id in similar_ids]
-
-            # Sort by similarity score
-            similarity_scores = {entry_id: score for entry_id, score in similar_entries}
-            entries.sort(key=lambda e: similarity_scores.get(e.entry_id, 0), reverse=True)
-
-        # Update access timestamps
-        for entry in entries:
-            self.database.update_access(entry.entry_id)
-
-        # Decrypt data if needed
-        retrieved_data = []
-        for entry in entries:
-            if entry.encrypted:
-                decrypted_data = self.encryption.decrypt_data(entry.data["encrypted_content"])
-                entry.data = decrypted_data
-
-            retrieved_data.append({
-                "entry_id": entry.entry_id,
-                "data": entry.data,
-                "created_at": entry.created_at.isoformat(),
-                "updated_at": entry.updated_at.isoformat(),
-                "access_count": entry.access_count,
-                "priority": entry.priority.value,
-                "content_type": entry.content_type,
-                "tags": entry.tags
-            })
-
-        # Call MCP tool
-        mcp_result = await self.mcp_client.call_tool("memory_retrieve", {
-            "bucket": bucket,
-            "filter_criteria": filter_criteria or {},
-            "user_id": user_id,
-            "results_count": len(retrieved_data)
-        })
-
-        result = {
-            "success": True,
-            "data": retrieved_data,
-            "total_results": len(retrieved_data),
-            "bucket": bucket,
-            "search_query": context.search_query if context else None
-        }
-
-        # Cache results
-        if filter_criteria:
-            await self.redis_client.setex(
-                cache_key,
-                timedelta(minutes=10),
-                json.dumps(result, default=str)
-            )
-
-        self.access_stats["total_retrievals"] += 1
-
-        return result
-
-    @traceable(name="prune_memory")
-    async def prune_memory(self, bucket: str, policy: Dict, context: MemoryContext = None) -> Dict:
-        """Prune memory based on policy"""
-        bucket_enum = MemoryBucket(bucket)
-        user_id = context.user_id if context else policy.get("user_id", "system")
-
-        pruned_count = 0
-
-        # Age-based pruning
-        if policy.get("max_age_days"):
-            cutoff_date = datetime.now() - timedelta(days=policy["max_age_days"])
-            with sqlite3.connect(self.database.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute('''
-                    DELETE FROM memory_entries 
-                    WHERE bucket = ? AND user_id = ? AND created_at < ?
-                ''', (bucket_enum.value, user_id, cutoff_date))
-                pruned_count += cursor.rowcount
-                conn.commit()
-
-        # Count-based pruning
-        if policy.get("max_entries"):
-            with sqlite3.connect(self.database.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute('''
-                    DELETE FROM memory_entries 
-                    WHERE entry_id IN (
-                        SELECT entry_id FROM memory_entries 
-                        WHERE bucket = ? AND user_id = ?
-                        ORDER BY updated_at DESC 
-                        LIMIT -1 OFFSET ?
-                    )
-                ''', (bucket_enum.value, user_id, policy["max_entries"]))
-                pruned_count += cursor.rowcount
-                conn.commit()
-
-        # Priority-based pruning
-        if policy.get("remove_low_priority"):
-            with sqlite3.connect(self.database.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute('''
-                    DELETE FROM memory_entries 
-                    WHERE bucket = ? AND user_id = ? AND priority = 'low'
-                ''', (bucket_enum.value, user_id))
-                pruned_count += cursor.rowcount
-                conn.commit()
-
-        # Clean up expired entries
-        expired_count = self.database.cleanup_expired()
-        pruned_count += expired_count
-
-        # Call MCP tool
-        mcp_result = await self.mcp_client.call_tool("prune_memory", {
-            "bucket": bucket,
-            "policy": policy,
-            "user_id": user_id,
-            "pruned_count": pruned_count
-        })
-
-        return {
-            "success": True,
-            "pruned_count": pruned_count,
-            "bucket": bucket,
-            "policy_applied": policy
-        }
-
-    async def create_memory_context(self, user_id: str, session_id: str,
-                                    agent_name: str = None, **kwargs) -> MemoryContext:
-        """Create memory context for operations"""
-        return MemoryContext(
-            user_id=user_id,
-            session_id=session_id,
-            operation_id=secrets.token_hex(8),
-            timestamp=datetime.now(),
-            agent_name=agent_name,
-            **kwargs
-        )
-
-    async def get_user_memory_summary(self, user_id: str) -> Dict:
-        """Get summary of user's memory usage"""
-        summary = {}
-
-        for bucket in MemoryBucket:
-            entries = self.database.search_entries(
-                bucket=bucket,
-                user_id=user_id,
-                limit=1000
-            )
-
-            summary[bucket.value] = {
-                "total_entries": len(entries),
-                "total_size_bytes": sum(len(json.dumps(e.data)) for e in entries),
-                "last_access": max(e.accessed_at for e in entries) if entries else None,
-                "oldest_entry": min(e.created_at for e in entries) if entries else None,
-                "newest_entry": max(e.created_at for e in entries) if entries else None
-            }
-
-        return {
-            "success": True,
-            "user_id": user_id,
-            "memory_summary": summary,
-            "total_entries": sum(s["total_entries"] for s in summary.values()),
-            "total_size_bytes": sum(s["total_size_bytes"] for s in summary.values())
-        }
-
-    def _extract_text_content(self, data: Dict) -> str:
-        """Extract text content for vector embedding"""
-        text_parts = []
-
-        def extract_recursive(obj, depth=0):
-            if depth > 5:
-                return
-
-            if isinstance(obj, dict):
-                for key, value in obj.items():
-                    if isinstance(value, str) and len(value) > 10:
-                        text_parts.append(f"{key}: {value}")
-                    elif isinstance(value, (dict, list)):
-                        extract_recursive(value, depth + 1)
-            elif isinstance(obj, list):
-                for item in obj:
-                    extract_recursive(item, depth + 1)
-            elif isinstance(obj, str) and len(obj) > 10:
-                text_parts.append(obj)
-
-        extract_recursive(data)
-        return " ".join(text_parts[:10])
-
-    async def _periodic_cleanup(self):
-        """Periodic cleanup task"""
-        while True:
-            await asyncio.sleep(self.config["cleanup_interval"])
-            expired_count = self.database.cleanup_expired()
-            if expired_count > 0:
-                logger.info(f"Cleaned up {expired_count} expired memory entries")
-
-    def get_memory_statistics(self) -> Dict:
-        """Get memory system statistics"""
-        return {
-            "access_statistics": self.access_stats,
-            "cache_hit_rate": self.access_stats["cache_hits"] / max(1,
-                                                                    self.access_stats["cache_hits"] + self.access_stats[
-                                                                        "cache_misses"]),
-            "vector_store_size": self.vector_store.index.ntotal,
-            "redis_available": self.redis_client is not None,
-            "retention_policies": self.config["retention_policies"]
-        }
+        # Fallback to SQLite
+        return await self._retrieve_from_sqlite(key)
