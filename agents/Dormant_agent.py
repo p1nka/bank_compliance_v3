@@ -1,502 +1,1264 @@
-# app.py - Fixed BankingComplianceSystem class
+"""
+agents/Dormant_agent.py - CBUAE Dormancy Analysis Agents
+Clean module matching the UI dashboard - No mock responses
+"""
 
+import pandas as pd
+import numpy as np
 import asyncio
-import threading
-import signal
-from typing import Optional
-# app.py - Fixed session state initialization
+import secrets
+import logging
+from datetime import datetime, timedelta
+from typing import Dict, List, Any, Optional, Union
+from dataclasses import dataclass, field
+from enum import Enum
+import io
+import base64
 
-import streamlit as st
-from typing import Optional, Dict, Any
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
+# ===== ENUMS =====
 
-def initialize_session_state():
-    """Initialize all required session state variables"""
+class AgentStatus(Enum):
+    IDLE = "idle"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
 
-    # Core application state
-    if 'logged_in' not in st.session_state:
-        st.session_state.logged_in = False
+class DormancyStatus(Enum):
+    PENDING_REVIEW = "pending_review"
+    ACTION_REQUIRED = "action_required"
+    UP_TO_DATE = "up_to_date"
+    PROCESSING = "processing"
+    CRITICAL = "critical"
+    READY = "ready"
+    IN_PROGRESS = "in_progress"
+    URGENT = "urgent"
+    PRIORITY = "priority"
+    MONITORED = "monitored"
 
-    if 'username' not in st.session_state:
-        st.session_state.username = None
+# ===== DATA CLASSES =====
 
-    if 'current_page' not in st.session_state:
-        st.session_state.current_page = 'login'
+@dataclass
+class AgentState:
+    agent_id: str
+    agent_type: str
+    session_id: str
+    user_id: str
+    timestamp: datetime
+    input_dataframe: Optional[pd.DataFrame] = None
+    agent_status: AgentStatus = AgentStatus.IDLE
+    records_processed: int = 0
+    dormant_records_found: int = 0
+    processing_time: float = 0.0
+    processed_dataframe: Optional[pd.DataFrame] = None
+    analysis_results: Optional[Dict] = None
+    error_log: List[Dict] = field(default_factory=list)
 
-    if 'agent_session_id' not in st.session_state:
-        st.session_state.agent_session_id = None
+@dataclass
+class AgentResult:
+    agent_name: str
+    agent_type: str
+    cbuae_article: str
+    records_processed: int
+    dormant_records_found: int
+    processing_time: float
+    success: bool
+    status: DormancyStatus
+    detailed_results_df: Optional[pd.DataFrame] = None
+    analysis_summary: Dict = field(default_factory=dict)
+    recommendations: List[str] = field(default_factory=list)
+    error_message: Optional[str] = None
 
-    # Data management state
-    if 'uploaded_data' not in st.session_state:
-        st.session_state.uploaded_data = None
+# ===== UTILITY FUNCTIONS =====
 
-    if 'processed_data' not in st.session_state:
-        st.session_state.processed_data = None
-
-    if 'mapping_results' not in st.session_state:
-        st.session_state.mapping_results = None
-
-    if 'mapping_sheet' not in st.session_state:
-        st.session_state.mapping_sheet = None
-
-    # Analysis results state
-    if 'quality_results' not in st.session_state:
-        st.session_state.quality_results = None
-
-    if 'dormancy_results' not in st.session_state:
-        st.session_state.dormancy_results = None
-
-    if 'compliance_results' not in st.session_state:
-        st.session_state.compliance_results = None
-
-    # Agent management state - FIX FOR THE ERROR
-    if 'intelligent_agent_manager' not in st.session_state:
-        st.session_state.intelligent_agent_manager = None
-
-    if 'memory_agent' not in st.session_state:
-        st.session_state.memory_agent = None
-
-    if 'mcp_client' not in st.session_state:
-        st.session_state.mcp_client = None
-
-    # Settings and preferences
-    if 'llm_enabled' not in st.session_state:
-        st.session_state.llm_enabled = False
-
-    if 'debug_mode' not in st.session_state:
-        st.session_state.debug_mode = False
-
-
-def safe_get_session_state(key: str, default: Any = None) -> Any:
-    """Safely get session state value with default"""
+def safe_date_parse(date_string: Union[str, datetime, None]) -> Optional[datetime]:
+    """Safely parse date string to datetime object"""
+    if date_string is None or pd.isna(date_string):
+        return None
+    if isinstance(date_string, datetime):
+        return date_string
     try:
-        return getattr(st.session_state, key, default)
-    except AttributeError:
-        # Initialize the key if it doesn't exist
-        setattr(st.session_state, key, default)
-        return default
-
-
-def initialize_intelligent_agent_manager():
-    """Fixed intelligent agent manager initialization"""
-    try:
-        # Check if already initialized - use safe access
-        if safe_get_session_state('intelligent_agent_manager') is None:
-
-            # Initialize the manager safely
-            try:
-                # Import your agent manager class
-                # from your_module import IntelligentAgentManager
-
-                # st.session_state.intelligent_agent_manager = IntelligentAgentManager()
-
-                # For now, set to empty dict to prevent the error
-                st.session_state.intelligent_agent_manager = {}
-
-                st.success("✅ Intelligent Agent Manager initialized successfully")
-
-            except Exception as init_error:
-                st.error(f"❌ Failed to initialize Intelligent Agent Manager: {init_error}")
-                # Set to empty dict to prevent further errors
-                st.session_state.intelligent_agent_manager = {}
-
-    except Exception as e:
-        st.error(f"❌ Error in agent manager initialization: {e}")
-        # Ensure the attribute exists even if initialization fails
-        st.session_state.intelligent_agent_manager = {}
-
-
-# Fixed event loop management for Streamlit
-def get_or_create_event_loop_streamlit():
-    """Streamlit-compatible event loop management"""
-    try:
-        # Check if we're in an existing event loop
-        try:
-            loop = asyncio.get_running_loop()
-            return loop
-        except RuntimeError:
-            pass
-
-        # Try to get the event loop for the current thread
-        try:
-            loop = asyncio.get_event_loop()
-            if not loop.is_closed():
-                return loop
-        except RuntimeError:
-            pass
-
-        # Create a new event loop
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        return loop
-
-    except Exception as e:
-        st.error(f"❌ Event loop creation failed: {e}")
-        # Return None and handle gracefully
+        return pd.to_datetime(date_string)
+    except:
         return None
 
+def calculate_dormancy_days(last_activity_date: Union[str, datetime],
+                          report_date: Union[str, datetime] = None) -> int:
+    """Calculate number of days account has been dormant"""
+    if report_date is None:
+        report_date = datetime.now()
 
-# Initialize session state at the start of your Streamlit app
-def main_streamlit():
-    """Main Streamlit application with proper initialization"""
+    last_date = safe_date_parse(last_activity_date)
+    report_date = safe_date_parse(report_date)
 
-    # Page configuration
-    st.set_page_config(
-        page_title="CBUAE Banking Compliance System",
-        page_icon="🏦",
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
+    if last_date is None or report_date is None:
+        return 0
 
-    # Initialize session state FIRST
-    initialize_session_state()
+    return (report_date - last_date).days
 
-    # Initialize agent manager safely
-    initialize_intelligent_agent_manager()
+def create_csv_download_data(df: pd.DataFrame, filename: str) -> Dict:
+    """Create CSV download data structure"""
+    if df is None or df.empty:
+        return {"available": False, "filename": filename, "records": 0}
 
-    # Your app logic here
-    if not st.session_state.logged_in:
-        show_login_page()
-    else:
-        show_main_application()
+    csv_buffer = io.StringIO()
+    df.to_csv(csv_buffer, index=False)
+    csv_string = csv_buffer.getvalue()
 
+    csv_bytes = csv_string.encode('utf-8')
+    csv_base64 = base64.b64encode(csv_bytes).decode('utf-8')
 
-if __name__ == "__main__":
-    main_streamlit()
+    return {
+        "available": True,
+        "filename": filename,
+        "records": len(df),
+        "csv_data": csv_string,
+        "csv_base64": csv_base64,
+        "download_link": f"data:text/csv;base64,{csv_base64}",
+        "file_size_kb": len(csv_bytes) / 1024
+    }
 
-    # Fixed data analysis functions with proper error handling
+# ===== BASE AGENT CLASS =====
 
-    import pandas as pd
-    import numpy as np
-    from typing import Any, Optional, Union
-    import logging
+class BaseDormancyAgent:
+    """Base class for all dormancy analysis agents"""
 
-    logger = logging.getLogger(__name__)
+    def __init__(self, agent_type: str):
+        self.agent_type = agent_type
+        self.agent_id = f"{agent_type}_{secrets.token_hex(8)}"
 
-
-    def safe_convert_to_numeric(series: pd.Series, default_value: float = 0.0) -> pd.Series:
-        """Safely convert series to numeric, handling errors gracefully"""
-        try:
-            return pd.to_numeric(series, errors='coerce').fillna(default_value)
-        except Exception as e:
-            logger.warning(f"Numeric conversion failed: {e}")
-            return pd.Series([default_value] * len(series), index=series.index)
-
-
-    def safe_convert_to_datetime(series: pd.Series) -> pd.Series:
-        """Safely convert series to datetime, handling errors gracefully"""
-        try:
-            return pd.to_datetime(series, errors='coerce')
-        except Exception as e:
-            logger.warning(f"Datetime conversion failed: {e}")
-            return pd.Series([pd.NaT] * len(series), index=series.index)
-
-
-    def safe_get_column(df: pd.DataFrame, column_name: str, default_value: Any = None) -> pd.Series:
-        """Safely get column from DataFrame with default value"""
-        if column_name in df.columns:
-            return df[column_name]
-        else:
-            logger.warning(f"Column '{column_name}' not found, using default value")
-            return pd.Series([default_value] * len(df), index=df.index)
-
-
-    def check_high_value_accounts_fixed(df: pd.DataFrame, threshold: float = 100000.0) -> pd.DataFrame:
-        """Fixed high value account detection"""
-        try:
-            # Safely get balance column and convert to numeric
-            balance_column = safe_get_column(df, 'balance_current', 0.0)
-            balance_numeric = safe_convert_to_numeric(balance_column)
-
-            # Create high value flag
-            df_result = df.copy()
-            df_result['is_high_value'] = balance_numeric > threshold
-
-            return df_result
-
-        except Exception as e:
-            logger.error(f"High value account check failed: {e}")
-            # Return original DataFrame with default high value column
-            df_result = df.copy()
-            df_result['is_high_value'] = False
-            return df_result
-
-
-    def check_contact_attempts_fixed(df: pd.DataFrame, max_attempts: int = 3) -> pd.DataFrame:
-        """Fixed contact attempts analysis"""
-        try:
-            # Safely get contact attempts column
-            contact_attempts = safe_get_column(df, 'contact_attempts_made', 0)
-            contact_attempts_numeric = safe_convert_to_numeric(contact_attempts, 0)
-
-            df_result = df.copy()
-            df_result['needs_contact'] = contact_attempts_numeric < max_attempts
-            df_result['contact_attempts_safe'] = contact_attempts_numeric
-
-            return df_result
-
-        except Exception as e:
-            logger.error(f"Contact attempts check failed: {e}")
-            df_result = df.copy()
-            df_result['needs_contact'] = True
-            df_result['contact_attempts_safe'] = 0
-            return df_result
-
-
-    def check_transfer_eligibility_fixed(df: pd.DataFrame) -> pd.DataFrame:
-        """Fixed transfer eligibility check"""
-        try:
-            # Safely get transfer date column
-            transfer_date = safe_get_column(df, 'transferred_to_cb_date')
-            transfer_date_converted = safe_convert_to_datetime(transfer_date)
-
-            df_result = df.copy()
-            df_result['eligible_for_transfer'] = transfer_date_converted.isna()
-            df_result['transfer_date_safe'] = transfer_date_converted
-
-            return df_result
-
-        except Exception as e:
-            logger.error(f"Transfer eligibility check failed: {e}")
-            df_result = df.copy()
-            df_result['eligible_for_transfer'] = True
-            df_result['transfer_date_safe'] = pd.NaT
-            return df_result
-
-
-    def analyze_balance_thresholds_fixed(df: pd.DataFrame,
-                                         low_threshold: float = 1000.0,
-                                         high_threshold: float = 100000.0) -> pd.DataFrame:
-        """Fixed balance threshold analysis with proper type handling"""
-        try:
-            # Get balance column safely
-            balance_column = safe_get_column(df, 'balance_current', 0.0)
-            balance_numeric = safe_convert_to_numeric(balance_column)
-
-            df_result = df.copy()
-
-            # Create threshold flags safely
-            df_result['balance_numeric'] = balance_numeric
-            df_result['is_low_balance'] = balance_numeric < low_threshold
-            df_result['is_high_balance'] = balance_numeric > high_threshold
-            df_result['balance_category'] = pd.cut(
-                balance_numeric,
-                bins=[-np.inf, low_threshold, high_threshold, np.inf],
-                labels=['Low', 'Medium', 'High']
-            )
-
-            return df_result
-
-        except Exception as e:
-            logger.error(f"Balance threshold analysis failed: {e}")
-            df_result = df.copy()
-            df_result['balance_numeric'] = 0.0
-            df_result['is_low_balance'] = True
-            df_result['is_high_balance'] = False
-            df_result['balance_category'] = 'Unknown'
-            return df_result
-
-
-    def comprehensive_data_validation(df: pd.DataFrame) -> dict:
-        """Comprehensive data validation with detailed reporting"""
-        validation_results = {
-            'total_records': len(df),
-            'total_columns': len(df.columns),
-            'missing_columns': [],
-            'data_type_issues': [],
-            'validation_passed': True,
-            'recommendations': []
+        # Standard column mappings for banking data
+        self.csv_columns = {
+            'customer_id': 'customer_id',
+            'account_id': 'account_id',
+            'account_type': 'account_type',
+            'account_status': 'account_status',
+            'last_transaction_date': 'last_transaction_date',
+            'balance_current': 'balance_current',
+            'dormancy_status': 'dormancy_status',
+            'currency': 'currency',
+            'contact_attempts_made': 'contact_attempts_made',
+            'last_contact_date': 'last_contact_date'
         }
 
-        # Expected columns based on your schema
-        expected_columns = [
-            'customer_id', 'balance_current', 'contact_attempts_made',
-            'transferred_to_cb_date', 'account_status', 'dormancy_status'
-        ]
+    def create_agent_state(self, user_id: str, dataframe: pd.DataFrame) -> AgentState:
+        """Create agent state for analysis"""
+        return AgentState(
+            agent_id=self.agent_id,
+            agent_type=self.agent_type,
+            session_id=f"session_{secrets.token_hex(8)}",
+            user_id=user_id,
+            timestamp=datetime.now(),
+            input_dataframe=dataframe,
+            agent_status=AgentStatus.IDLE
+        )
 
-        # Check for missing columns
-        for col in expected_columns:
-            if col not in df.columns:
-                validation_results['missing_columns'].append(col)
-                validation_results['validation_passed'] = False
+    async def analyze_dormancy(self, state: AgentState) -> AgentState:
+        """Base analyze method - to be overridden by subclasses"""
+        raise NotImplementedError("Subclasses must implement analyze_dormancy")
 
-        # Check data types for critical columns
-        if 'balance_current' in df.columns:
-            try:
-                pd.to_numeric(df['balance_current'], errors='raise')
-            except (ValueError, TypeError):
-                validation_results['data_type_issues'].append('balance_current: cannot convert to numeric')
-                validation_results['validation_passed'] = False
+# ===== SPECIFIC DORMANCY AGENTS MATCHING UI =====
 
-        if 'contact_attempts_made' in df.columns:
-            try:
-                pd.to_numeric(df['contact_attempts_made'], errors='raise')
-            except (ValueError, TypeError):
-                validation_results['data_type_issues'].append('contact_attempts_made: cannot convert to numeric')
-                validation_results['validation_passed'] = False
+class SafeDepositDormancyAgent(BaseDormancyAgent):
+    """Safe Deposit Dormancy Analysis - CBUAE Article 3.7"""
 
-        # Generate recommendations
-        if validation_results['missing_columns']:
-            validation_results['recommendations'].append('Add missing columns or update column mapping')
+    def __init__(self):
+        super().__init__("safe_deposit_dormancy")
+        self.cbuae_article = "CBUAE Art. 3.7"
+        self.ui_status = DormancyStatus.PENDING_REVIEW
 
-        if validation_results['data_type_issues']:
-            validation_results['recommendations'].append('Clean data types before analysis')
-
-        return validation_results
-
-
-    # Usage example for the fixed functions:
-    def run_fixed_analysis(df: pd.DataFrame) -> dict:
-        """Run analysis with fixed functions and comprehensive error handling"""
-
+    async def analyze_dormancy(self, state: AgentState) -> AgentState:
+        """Analyze safe deposit boxes requiring court applications"""
         try:
-            # Validate data first
-            validation = comprehensive_data_validation(df)
+            start_time = datetime.now()
+            state.agent_status = AgentStatus.PROCESSING
 
-            if not validation['validation_passed']:
-                logger.warning(f"Data validation issues found: {validation}")
+            df = state.input_dataframe
+            if df is None or df.empty:
+                raise ValueError("No input data provided")
 
-            # Run analysis with fixed functions
-            results = {}
+            # Filter for safe deposit box accounts
+            safe_deposits = df[
+                df[self.csv_columns['account_type']].str.contains(
+                    'SAFE_DEPOSIT|SDB|Safe Deposit', case=False, na=False
+                )
+            ].copy()
 
-            # High value accounts
-            try:
-                high_value_df = check_high_value_accounts_fixed(df)
-                results['high_value_analysis'] = {
-                    'total_high_value': high_value_df['is_high_value'].sum(),
-                    'percentage': (high_value_df['is_high_value'].sum() / len(df)) * 100
+            dormant_accounts = []
+            report_date = datetime.now()
+
+            for idx, account in safe_deposits.iterrows():
+                last_transaction = account[self.csv_columns['last_transaction_date']]
+                dormancy_days = calculate_dormancy_days(last_transaction, report_date)
+
+                # CBUAE Article 3.7: 2+ years for court application
+                if dormancy_days >= 730:
+                    dormant_accounts.append({
+                        'customer_id': account[self.csv_columns['customer_id']],
+                        'account_id': account[self.csv_columns['account_id']],
+                        'account_type': account[self.csv_columns['account_type']],
+                        'dormancy_days': dormancy_days,
+                        'compliance_article': self.cbuae_article,
+                        'action_required': 'File court application for box access',
+                        'priority': 'High',
+                        'analysis_date': datetime.now().strftime('%Y-%m-%d')
+                    })
+
+            # Update state
+            state.records_processed = len(safe_deposits)
+            state.dormant_records_found = len(dormant_accounts)
+            state.processing_time = (datetime.now() - start_time).total_seconds()
+            state.agent_status = AgentStatus.COMPLETED
+
+            if dormant_accounts:
+                state.processed_dataframe = pd.DataFrame(dormant_accounts)
+
+            # Create CSV export
+            csv_export = create_csv_download_data(
+                state.processed_dataframe or pd.DataFrame(),
+                f"safe_deposit_dormancy_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            )
+
+            state.analysis_results = {
+                'description': 'Safe deposit dormancy analysis per CBUAE Article 3.7',
+                'compliance_article': self.cbuae_article,
+                'status': self.ui_status.value,
+                'dormant_accounts': dormant_accounts,
+                'csv_export': csv_export,
+                'summary_stats': {
+                    'total_processed': len(safe_deposits),
+                    'dormant_found': len(dormant_accounts)
                 }
-            except Exception as e:
-                logger.error(f"High value analysis failed: {e}")
-                results['high_value_analysis'] = {'error': str(e)}
+            }
 
-            # Contact attempts
-            try:
-                contact_df = check_contact_attempts_fixed(df)
-                results['contact_analysis'] = {
-                    'needs_contact': contact_df['needs_contact'].sum(),
-                    'average_attempts': contact_df['contact_attempts_safe'].mean()
+            return state
+
+        except Exception as e:
+            state.agent_status = AgentStatus.FAILED
+            state.error_log.append({
+                "timestamp": datetime.now().isoformat(),
+                "error": str(e),
+                "stage": "safe_deposit_analysis"
+            })
+            logger.error(f"Safe deposit analysis failed: {e}")
+            return state
+
+class InvestmentAccountInactivityAgent(BaseDormancyAgent):
+    """Investment Account Inactivity Analysis - CBUAE Article 2.2"""
+
+    def __init__(self):
+        super().__init__("investment_account_inactivity")
+        self.cbuae_article = "CBUAE Art. 2.2"
+        self.ui_status = DormancyStatus.ACTION_REQUIRED
+
+    async def analyze_dormancy(self, state: AgentState) -> AgentState:
+        """Analyze investment account inactivity requiring customer contact"""
+        try:
+            start_time = datetime.now()
+            state.agent_status = AgentStatus.PROCESSING
+
+            df = state.input_dataframe
+            if df is None or df.empty:
+                raise ValueError("No input data provided")
+
+            # Filter for investment accounts
+            investment_accounts = df[
+                df[self.csv_columns['account_type']].str.contains(
+                    'INVESTMENT|PORTFOLIO|MUTUAL|SECURITIES', case=False, na=False
+                )
+            ].copy()
+
+            dormant_accounts = []
+            report_date = datetime.now()
+
+            for idx, account in investment_accounts.iterrows():
+                last_transaction = account[self.csv_columns['last_transaction_date']]
+                balance = account[self.csv_columns['balance_current']]
+                dormancy_days = calculate_dormancy_days(last_transaction, report_date)
+
+                # CBUAE Article 2.2: 12 months for investment products
+                if dormancy_days >= 365:
+                    dormant_accounts.append({
+                        'customer_id': account[self.csv_columns['customer_id']],
+                        'account_id': account[self.csv_columns['account_id']],
+                        'account_type': account[self.csv_columns['account_type']],
+                        'balance_current': float(balance) if pd.notna(balance) else 0.0,
+                        'dormancy_days': dormancy_days,
+                        'compliance_article': self.cbuae_article,
+                        'action_required': 'Review investment product status and contact customer',
+                        'priority': 'High',
+                        'analysis_date': datetime.now().strftime('%Y-%m-%d')
+                    })
+
+            # Update state
+            state.records_processed = len(investment_accounts)
+            state.dormant_records_found = len(dormant_accounts)
+            state.processing_time = (datetime.now() - start_time).total_seconds()
+            state.agent_status = AgentStatus.COMPLETED
+
+            if dormant_accounts:
+                state.processed_dataframe = pd.DataFrame(dormant_accounts)
+
+            # Create CSV export
+            csv_export = create_csv_download_data(
+                state.processed_dataframe or pd.DataFrame(),
+                f"investment_inactivity_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            )
+
+            state.analysis_results = {
+                'description': 'Investment account inactivity analysis per CBUAE Article 2.2',
+                'compliance_article': self.cbuae_article,
+                'status': self.ui_status.value,
+                'dormant_accounts': dormant_accounts,
+                'csv_export': csv_export,
+                'summary_stats': {
+                    'total_processed': len(investment_accounts),
+                    'dormant_found': len(dormant_accounts)
                 }
-            except Exception as e:
-                logger.error(f"Contact analysis failed: {e}")
-                results['contact_analysis'] = {'error': str(e)}
+            }
 
-            # Transfer eligibility
-            try:
-                transfer_df = check_transfer_eligibility_fixed(df)
-                results['transfer_analysis'] = {
-                    'eligible_count': transfer_df['eligible_for_transfer'].sum()
+            return state
+
+        except Exception as e:
+            state.agent_status = AgentStatus.FAILED
+            state.error_log.append({
+                "timestamp": datetime.now().isoformat(),
+                "error": str(e),
+                "stage": "investment_inactivity_analysis"
+            })
+            logger.error(f"Investment inactivity analysis failed: {e}")
+            return state
+
+class FixedDepositInactivityAgent(BaseDormancyAgent):
+    """Fixed Deposit Inactivity Analysis - CBUAE Article 2.1.2"""
+
+    def __init__(self):
+        super().__init__("fixed_deposit_inactivity")
+        self.cbuae_article = "CBUAE Art. 2.1.2"
+        self.ui_status = DormancyStatus.UP_TO_DATE
+
+    async def analyze_dormancy(self, state: AgentState) -> AgentState:
+        """Analyze fixed deposit maturity monitoring"""
+        try:
+            start_time = datetime.now()
+            state.agent_status = AgentStatus.PROCESSING
+
+            df = state.input_dataframe
+            if df is None or df.empty:
+                raise ValueError("No input data provided")
+
+            # Filter for fixed deposits
+            fixed_deposits = df[
+                df[self.csv_columns['account_type']].str.contains(
+                    'FIXED_DEPOSIT|TERM_DEPOSIT|CD|CERTIFICATE', case=False, na=False
+                )
+            ].copy()
+
+            dormant_accounts = []
+            report_date = datetime.now()
+
+            for idx, account in fixed_deposits.iterrows():
+                last_transaction = account[self.csv_columns['last_transaction_date']]
+                balance = account[self.csv_columns['balance_current']]
+                dormancy_days = calculate_dormancy_days(last_transaction, report_date)
+
+                # CBUAE Article 2.1.2: 12 months post-maturity
+                if dormancy_days >= 365:
+                    dormant_accounts.append({
+                        'customer_id': account[self.csv_columns['customer_id']],
+                        'account_id': account[self.csv_columns['account_id']],
+                        'account_type': account[self.csv_columns['account_type']],
+                        'balance_current': float(balance) if pd.notna(balance) else 0.0,
+                        'dormancy_days': dormancy_days,
+                        'compliance_article': self.cbuae_article,
+                        'action_required': 'Monitor maturity dates and contact customer',
+                        'priority': 'Medium',
+                        'analysis_date': datetime.now().strftime('%Y-%m-%d')
+                    })
+
+            # Update state
+            state.records_processed = len(fixed_deposits)
+            state.dormant_records_found = len(dormant_accounts)
+            state.processing_time = (datetime.now() - start_time).total_seconds()
+            state.agent_status = AgentStatus.COMPLETED
+
+            if dormant_accounts:
+                state.processed_dataframe = pd.DataFrame(dormant_accounts)
+
+            # Create CSV export
+            csv_export = create_csv_download_data(
+                state.processed_dataframe or pd.DataFrame(),
+                f"fixed_deposit_inactivity_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            )
+
+            state.analysis_results = {
+                'description': 'Fixed deposit inactivity analysis per CBUAE Article 2.1.2',
+                'compliance_article': self.cbuae_article,
+                'status': self.ui_status.value,
+                'dormant_accounts': dormant_accounts,
+                'csv_export': csv_export,
+                'summary_stats': {
+                    'total_processed': len(fixed_deposits),
+                    'dormant_found': len(dormant_accounts)
                 }
-            except Exception as e:
-                logger.error(f"Transfer analysis failed: {e}")
-                results['transfer_analysis'] = {'error': str(e)}
+            }
 
-            # Balance analysis
-            try:
-                balance_df = analyze_balance_thresholds_fixed(df)
-                results['balance_analysis'] = {
-                    'low_balance_count': balance_df['is_low_balance'].sum(),
-                    'high_balance_count': balance_df['is_high_balance'].sum(),
-                    'average_balance': balance_df['balance_numeric'].mean()
+            return state
+
+        except Exception as e:
+            state.agent_status = AgentStatus.FAILED
+            state.error_log.append({
+                "timestamp": datetime.now().isoformat(),
+                "error": str(e),
+                "stage": "fixed_deposit_inactivity_analysis"
+            })
+            logger.error(f"Fixed deposit inactivity analysis failed: {e}")
+            return state
+
+class DemandDepositInactivityAgent(BaseDormancyAgent):
+    """Demand Deposit Inactivity Analysis - CBUAE Article 2.1.1"""
+
+    def __init__(self):
+        super().__init__("demand_deposit_inactivity")
+        self.cbuae_article = "CBUAE Art. 2.1.1"
+        self.ui_status = DormancyStatus.PROCESSING
+
+    async def analyze_dormancy(self, state: AgentState) -> AgentState:
+        """Analyze demand deposit accounts for dormancy flagging"""
+        try:
+            start_time = datetime.now()
+            state.agent_status = AgentStatus.PROCESSING
+
+            df = state.input_dataframe
+            if df is None or df.empty:
+                raise ValueError("No input data provided")
+
+            # Filter for demand deposits (current/savings accounts)
+            demand_deposits = df[
+                df[self.csv_columns['account_type']].str.contains(
+                    'CURRENT|SAVINGS|CHECKING', case=False, na=False
+                )
+            ].copy()
+
+            dormant_accounts = []
+            report_date = datetime.now()
+
+            for idx, account in demand_deposits.iterrows():
+                last_transaction = account[self.csv_columns['last_transaction_date']]
+                balance = account[self.csv_columns['balance_current']]
+                dormancy_days = calculate_dormancy_days(last_transaction, report_date)
+
+                # CBUAE Article 2.1.1: 12 months inactivity
+                if dormancy_days >= 365:
+                    dormant_accounts.append({
+                        'customer_id': account[self.csv_columns['customer_id']],
+                        'account_id': account[self.csv_columns['account_id']],
+                        'account_type': account[self.csv_columns['account_type']],
+                        'balance_current': float(balance) if pd.notna(balance) else 0.0,
+                        'dormancy_days': dormancy_days,
+                        'compliance_article': self.cbuae_article,
+                        'action_required': 'Flag as dormant and initiate contact',
+                        'priority': 'Medium',
+                        'analysis_date': datetime.now().strftime('%Y-%m-%d')
+                    })
+
+            # Update state
+            state.records_processed = len(demand_deposits)
+            state.dormant_records_found = len(dormant_accounts)
+            state.processing_time = (datetime.now() - start_time).total_seconds()
+            state.agent_status = AgentStatus.COMPLETED
+
+            if dormant_accounts:
+                state.processed_dataframe = pd.DataFrame(dormant_accounts)
+
+            # Create CSV export
+            csv_export = create_csv_download_data(
+                state.processed_dataframe or pd.DataFrame(),
+                f"demand_deposit_inactivity_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            )
+
+            state.analysis_results = {
+                'description': 'Demand deposit inactivity analysis per CBUAE Article 2.1.1',
+                'compliance_article': self.cbuae_article,
+                'status': self.ui_status.value,
+                'dormant_accounts': dormant_accounts,
+                'csv_export': csv_export,
+                'summary_stats': {
+                    'total_processed': len(demand_deposits),
+                    'dormant_found': len(dormant_accounts)
                 }
-            except Exception as e:
-                logger.error(f"Balance analysis failed: {e}")
-                results['balance_analysis'] = {'error': str(e)}
+            }
 
-            results['validation_results'] = validation
-            results['analysis_completed'] = True
+            return state
+
+        except Exception as e:
+            state.agent_status = AgentStatus.FAILED
+            state.error_log.append({
+                "timestamp": datetime.now().isoformat(),
+                "error": str(e),
+                "stage": "demand_deposit_inactivity_analysis"
+            })
+            logger.error(f"Demand deposit inactivity analysis failed: {e}")
+            return state
+
+class UnclaimedPaymentInstrumentsAgent(BaseDormancyAgent):
+    """Unclaimed Payment Instruments Analysis - CBUAE Article 3.6"""
+
+    def __init__(self):
+        super().__init__("unclaimed_payment_instruments")
+        self.cbuae_article = "CBUAE Art. 3.6"
+        self.ui_status = DormancyStatus.CRITICAL
+
+    async def analyze_dormancy(self, state: AgentState) -> AgentState:
+        """Analyze unclaimed payment instruments requiring ledger transfer"""
+        try:
+            start_time = datetime.now()
+            state.agent_status = AgentStatus.PROCESSING
+
+            df = state.input_dataframe
+            if df is None or df.empty:
+                raise ValueError("No input data provided")
+
+            # Filter for payment instruments
+            payment_instruments = df[
+                df[self.csv_columns['account_type']].str.contains(
+                    'PAYMENT|CHECK|DRAFT|INSTRUMENT|CHEQUE', case=False, na=False
+                )
+            ].copy()
+
+            dormant_accounts = []
+            report_date = datetime.now()
+
+            for idx, account in payment_instruments.iterrows():
+                last_transaction = account[self.csv_columns['last_transaction_date']]
+                balance = account[self.csv_columns['balance_current']]
+                dormancy_days = calculate_dormancy_days(last_transaction, report_date)
+
+                # CBUAE Article 3.6: 1+ year unclaimed
+                if dormancy_days >= 365:
+                    dormant_accounts.append({
+                        'customer_id': account[self.csv_columns['customer_id']],
+                        'account_id': account[self.csv_columns['account_id']],
+                        'account_type': account[self.csv_columns['account_type']],
+                        'balance_current': float(balance) if pd.notna(balance) else 0.0,
+                        'dormancy_days': dormancy_days,
+                        'compliance_article': self.cbuae_article,
+                        'action_required': 'Process for ledger transfer',
+                        'priority': 'Critical',
+                        'analysis_date': datetime.now().strftime('%Y-%m-%d')
+                    })
+
+            # Update state
+            state.records_processed = len(payment_instruments)
+            state.dormant_records_found = len(dormant_accounts)
+            state.processing_time = (datetime.now() - start_time).total_seconds()
+            state.agent_status = AgentStatus.COMPLETED
+
+            if dormant_accounts:
+                state.processed_dataframe = pd.DataFrame(dormant_accounts)
+
+            # Create CSV export
+            csv_export = create_csv_download_data(
+                state.processed_dataframe or pd.DataFrame(),
+                f"unclaimed_payment_instruments_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            )
+
+            state.analysis_results = {
+                'description': 'Unclaimed payment instruments analysis per CBUAE Article 3.6',
+                'compliance_article': self.cbuae_article,
+                'status': self.ui_status.value,
+                'dormant_accounts': dormant_accounts,
+                'csv_export': csv_export,
+                'summary_stats': {
+                    'total_processed': len(payment_instruments),
+                    'dormant_found': len(dormant_accounts)
+                }
+            }
+
+            return state
+
+        except Exception as e:
+            state.agent_status = AgentStatus.FAILED
+            state.error_log.append({
+                "timestamp": datetime.now().isoformat(),
+                "error": str(e),
+                "stage": "unclaimed_payment_instruments_analysis"
+            })
+            logger.error(f"Unclaimed payment instruments analysis failed: {e}")
+            return state
+
+class EligibleForCBUAETransferAgent(BaseDormancyAgent):
+    """Eligible for CBUAE Transfer Analysis - CBUAE Article 8"""
+
+    def __init__(self):
+        super().__init__("eligible_for_cbuae_transfer")
+        self.cbuae_article = "CBUAE Art. 8"
+        self.ui_status = DormancyStatus.READY
+
+    async def analyze_dormancy(self, state: AgentState) -> AgentState:
+        """Analyze accounts ready for Central Bank transfer"""
+        try:
+            start_time = datetime.now()
+            state.agent_status = AgentStatus.PROCESSING
+
+            df = state.input_dataframe
+            if df is None or df.empty:
+                raise ValueError("No input data provided")
+
+            # Look for dormant accounts eligible for CBUAE transfer
+            dormant_accounts = df[
+                df[self.csv_columns['dormancy_status']].str.contains(
+                    'DORMANT|Dormant', case=False, na=False
+                )
+            ].copy()
+
+            transfer_eligible = []
+            report_date = datetime.now()
+
+            for idx, account in dormant_accounts.iterrows():
+                last_transaction = account[self.csv_columns['last_transaction_date']]
+                balance = account[self.csv_columns['balance_current']]
+                contact_attempts = account.get(self.csv_columns['contact_attempts_made'], 0)
+                dormancy_days = calculate_dormancy_days(last_transaction, report_date)
+
+                # CBUAE Article 8: 5+ years with completed contact attempts
+                if dormancy_days >= 1825 and contact_attempts >= 3:
+                    transfer_eligible.append({
+                        'customer_id': account[self.csv_columns['customer_id']],
+                        'account_id': account[self.csv_columns['account_id']],
+                        'account_type': account[self.csv_columns['account_type']],
+                        'balance_current': float(balance) if pd.notna(balance) else 0.0,
+                        'dormancy_days': dormancy_days,
+                        'contact_attempts': int(contact_attempts),
+                        'compliance_article': self.cbuae_article,
+                        'action_required': 'Prepare transfer documentation',
+                        'priority': 'High',
+                        'analysis_date': datetime.now().strftime('%Y-%m-%d')
+                    })
+
+            # Update state
+            state.records_processed = len(dormant_accounts)
+            state.dormant_records_found = len(transfer_eligible)
+            state.processing_time = (datetime.now() - start_time).total_seconds()
+            state.agent_status = AgentStatus.COMPLETED
+
+            if transfer_eligible:
+                state.processed_dataframe = pd.DataFrame(transfer_eligible)
+
+            # Create CSV export
+            csv_export = create_csv_download_data(
+                state.processed_dataframe or pd.DataFrame(),
+                f"cbuae_transfer_eligible_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            )
+
+            state.analysis_results = {
+                'description': 'CBUAE transfer eligibility analysis per CBUAE Article 8',
+                'compliance_article': self.cbuae_article,
+                'status': self.ui_status.value,
+                'transfer_eligible': transfer_eligible,
+                'csv_export': csv_export,
+                'summary_stats': {
+                    'total_processed': len(dormant_accounts),
+                    'transfer_eligible': len(transfer_eligible)
+                }
+            }
+
+            return state
+
+        except Exception as e:
+            state.agent_status = AgentStatus.FAILED
+            state.error_log.append({
+                "timestamp": datetime.now().isoformat(),
+                "error": str(e),
+                "stage": "cbuae_transfer_analysis"
+            })
+            logger.error(f"CBUAE transfer analysis failed: {e}")
+            return state
+
+class Article3ProcessNeededAgent(BaseDormancyAgent):
+    """Article 3 Process Needed Analysis - CBUAE Article 3"""
+
+    def __init__(self):
+        super().__init__("article_3_process_needed")
+        self.cbuae_article = "CBUAE Art. 3"
+        self.ui_status = DormancyStatus.IN_PROGRESS
+
+    async def analyze_dormancy(self, state: AgentState) -> AgentState:
+        """Analyze accounts requiring Article 3 dormancy processes"""
+        try:
+            start_time = datetime.now()
+            state.agent_status = AgentStatus.PROCESSING
+
+            df = state.input_dataframe
+            if df is None or df.empty:
+                raise ValueError("No input data provided")
+
+            # Look for accounts requiring Article 3 processes
+            article3_candidates = []
+            report_date = datetime.now()
+
+            for idx, account in df.iterrows():
+                dormancy_status = account.get(self.csv_columns['dormancy_status'], '')
+                last_transaction = account[self.csv_columns['last_transaction_date']]
+                dormancy_days = calculate_dormancy_days(last_transaction, report_date)
+
+                # Article 3 processes for dormant accounts
+                if 'dormant' in str(dormancy_status).lower() and dormancy_days >= 365:
+                    article3_candidates.append({
+                        'customer_id': account[self.csv_columns['customer_id']],
+                        'account_id': account[self.csv_columns['account_id']],
+                        'account_type': account[self.csv_columns['account_type']],
+                        'dormancy_days': dormancy_days,
+                        'compliance_article': self.cbuae_article,
+                        'action_required': 'Apply Article 3 dormancy processes',
+                        'priority': 'High',
+                        'analysis_date': datetime.now().strftime('%Y-%m-%d')
+                    })
+
+            # Update state
+            state.records_processed = len(df)
+            state.dormant_records_found = len(article3_candidates)
+            state.processing_time = (datetime.now() - start_time).total_seconds()
+            state.agent_status = AgentStatus.COMPLETED
+
+            if article3_candidates:
+                state.processed_dataframe = pd.DataFrame(article3_candidates)
+
+            # Create CSV export
+            csv_export = create_csv_download_data(
+                state.processed_dataframe or pd.DataFrame(),
+                f"article3_process_needed_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            )
+
+            state.analysis_results = {
+                'description': 'Article 3 process requirements analysis',
+                'compliance_article': self.cbuae_article,
+                'status': self.ui_status.value,
+                'article3_candidates': article3_candidates,
+                'csv_export': csv_export,
+                'summary_stats': {
+                    'total_processed': len(df),
+                    'process_needed': len(article3_candidates)
+                }
+            }
+
+            return state
+
+        except Exception as e:
+            state.agent_status = AgentStatus.FAILED
+            state.error_log.append({
+                "timestamp": datetime.now().isoformat(),
+                "error": str(e),
+                "stage": "article3_process_analysis"
+            })
+            logger.error(f"Article 3 process analysis failed: {e}")
+            return state
+
+class ContactAttemptsNeededAgent(BaseDormancyAgent):
+    """Contact Attempts Needed Analysis - CBUAE Article 5"""
+
+    def __init__(self):
+        super().__init__("contact_attempts_needed")
+        self.cbuae_article = "CBUAE Art. 5"
+        self.ui_status = DormancyStatus.URGENT
+
+    async def analyze_dormancy(self, state: AgentState) -> AgentState:
+        """Analyze accounts requiring customer contact attempts"""
+        try:
+            start_time = datetime.now()
+            state.agent_status = AgentStatus.PROCESSING
+
+            df = state.input_dataframe
+            if df is None or df.empty:
+                raise ValueError("No input data provided")
+
+            # Look for dormant accounts with insufficient contact attempts
+            incomplete_contacts = []
+
+            # Filter for dormant accounts
+            dormant_accounts = df[
+                df[self.csv_columns['dormancy_status']].str.contains(
+                    'DORMANT|Dormant', case=False, na=False
+                )
+            ].copy()
+
+            for idx, account in dormant_accounts.iterrows():
+                contact_attempts = account.get(self.csv_columns['contact_attempts_made'], 0)
+
+                # CBUAE Article 5: Minimum 3 contact attempts required
+                if contact_attempts < 3:
+                    incomplete_contacts.append({
+                        'customer_id': account[self.csv_columns['customer_id']],
+                        'account_id': account[self.csv_columns['account_id']],
+                        'account_type': account[self.csv_columns['account_type']],
+                        'contact_attempts_made': int(contact_attempts),
+                        'required_attempts': 3,
+                        'remaining_attempts': max(0, 3 - int(contact_attempts)),
+                        'compliance_article': self.cbuae_article,
+                        'action_required': f'Complete {3 - int(contact_attempts)} additional contact attempts',
+                        'priority': 'Urgent',
+                        'analysis_date': datetime.now().strftime('%Y-%m-%d')
+                    })
+
+            # Update state
+            state.records_processed = len(dormant_accounts)
+            state.dormant_records_found = len(incomplete_contacts)
+            state.processing_time = (datetime.now() - start_time).total_seconds()
+            state.agent_status = AgentStatus.COMPLETED
+
+            if incomplete_contacts:
+                state.processed_dataframe = pd.DataFrame(incomplete_contacts)
+
+            # Create CSV export
+            csv_export = create_csv_download_data(
+                state.processed_dataframe or pd.DataFrame(),
+                f"contact_attempts_needed_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            )
+
+            state.analysis_results = {
+                'description': 'Contact attempts compliance analysis per CBUAE Article 5',
+                'compliance_article': self.cbuae_article,
+                'status': self.ui_status.value,
+                'incomplete_contacts': incomplete_contacts,
+                'csv_export': csv_export,
+                'summary_stats': {
+                    'total_dormant_reviewed': len(dormant_accounts),
+                    'insufficient_contacts': len(incomplete_contacts)
+                }
+            }
+
+            return state
+
+        except Exception as e:
+            state.agent_status = AgentStatus.FAILED
+            state.error_log.append({
+                "timestamp": datetime.now().isoformat(),
+                "error": str(e),
+                "stage": "contact_attempts_analysis"
+            })
+            logger.error(f"Contact attempts analysis failed: {e}")
+            return state
+
+class HighValueDormantAgent(BaseDormancyAgent):
+    """High Value Dormant (≥25K AED) Analysis"""
+
+    def __init__(self):
+        super().__init__("high_value_dormant")
+        self.cbuae_article = "Risk Management"
+        self.ui_status = DormancyStatus.PRIORITY
+
+    async def analyze_dormancy(self, state: AgentState) -> AgentState:
+        """Analyze high value dormant accounts requiring escalated monitoring"""
+        try:
+            start_time = datetime.now()
+            state.agent_status = AgentStatus.PROCESSING
+
+            df = state.input_dataframe
+            if df is None or df.empty:
+                raise ValueError("No input data provided")
+
+            # Filter for high value dormant accounts (≥25K AED)
+            high_value_dormant = df[
+                (df[self.csv_columns['dormancy_status']].str.contains(
+                    'DORMANT|Dormant', case=False, na=False
+                )) &
+                (df[self.csv_columns['balance_current']] >= 25000)
+            ].copy()
+
+            dormant_accounts = []
+
+            for idx, account in high_value_dormant.iterrows():
+                balance = account[self.csv_columns['balance_current']]
+                balance_value = float(balance) if pd.notna(balance) else 0.0
+
+                if balance_value >= 25000:
+                    dormant_accounts.append({
+                        'customer_id': account[self.csv_columns['customer_id']],
+                        'account_id': account[self.csv_columns['account_id']],
+                        'account_type': account[self.csv_columns['account_type']],
+                        'balance_current': balance_value,
+                        'currency': account.get(self.csv_columns['currency'], 'AED'),
+                        'compliance_article': self.cbuae_article,
+                        'action_required': 'Escalated monitoring and priority contact',
+                        'priority': 'Critical' if balance_value >= 100000 else 'High',
+                        'risk_category': 'High Value Dormant',
+                        'analysis_date': datetime.now().strftime('%Y-%m-%d')
+                    })
+
+            # Update state
+            state.records_processed = len(high_value_dormant)
+            state.dormant_records_found = len(dormant_accounts)
+            state.processing_time = (datetime.now() - start_time).total_seconds()
+            state.agent_status = AgentStatus.COMPLETED
+
+            if dormant_accounts:
+                state.processed_dataframe = pd.DataFrame(dormant_accounts)
+
+            # Create CSV export
+            csv_export = create_csv_download_data(
+                state.processed_dataframe or pd.DataFrame(),
+                f"high_value_dormant_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            )
+
+            state.analysis_results = {
+                'description': 'High value dormant accounts analysis (≥25K AED)',
+                'compliance_article': self.cbuae_article,
+                'status': self.ui_status.value,
+                'dormant_accounts': dormant_accounts,
+                'csv_export': csv_export,
+                'summary_stats': {
+                    'total_processed': len(high_value_dormant),
+                    'high_value_found': len(dormant_accounts),
+                    'total_value': sum([acc['balance_current'] for acc in dormant_accounts])
+                }
+            }
+
+            return state
+
+        except Exception as e:
+            state.agent_status = AgentStatus.FAILED
+            state.error_log.append({
+                "timestamp": datetime.now().isoformat(),
+                "error": str(e),
+                "stage": "high_value_dormant_analysis"
+            })
+            logger.error(f"High value dormant analysis failed: {e}")
+            return state
+
+class DormantToActiveTransitionsAgent(BaseDormancyAgent):
+    """Dormant to Active Transitions Analysis"""
+
+    def __init__(self):
+        super().__init__("dormant_to_active_transitions")
+        self.cbuae_article = "Monitoring"
+        self.ui_status = DormancyStatus.MONITORED
+
+    async def analyze_dormancy(self, state: AgentState) -> AgentState:
+        """Analyze accounts transitioning from dormant to active status"""
+        try:
+            start_time = datetime.now()
+            state.agent_status = AgentStatus.PROCESSING
+
+            df = state.input_dataframe
+            if df is None or df.empty:
+                raise ValueError("No input data provided")
+
+            # Look for recent activity on accounts with dormancy history
+            transitions = []
+            report_date = datetime.now()
+
+            for idx, account in df.iterrows():
+                dormancy_status = account.get(self.csv_columns['dormancy_status'], '')
+                last_transaction = account[self.csv_columns['last_transaction_date']]
+
+                # Check for recent activity (within last 30 days)
+                recent_activity_days = calculate_dormancy_days(last_transaction, report_date)
+
+                # Look for transitions from dormant to active
+                if (recent_activity_days <= 30 and
+                    'dormant' in str(dormancy_status).lower()):
+
+                    transitions.append({
+                        'customer_id': account[self.csv_columns['customer_id']],
+                        'account_id': account[self.csv_columns['account_id']],
+                        'account_type': account[self.csv_columns['account_type']],
+                        'last_transaction_date': str(last_transaction),
+                        'days_since_activity': recent_activity_days,
+                        'compliance_article': self.cbuae_article,
+                        'action_required': 'Update dormancy status tracking',
+                        'priority': 'Medium',
+                        'transition_type': 'Dormant to Active',
+                        'analysis_date': datetime.now().strftime('%Y-%m-%d')
+                    })
+
+            # Update state
+            state.records_processed = len(df)
+            state.dormant_records_found = len(transitions)
+            state.processing_time = (datetime.now() - start_time).total_seconds()
+            state.agent_status = AgentStatus.COMPLETED
+
+            if transitions:
+                state.processed_dataframe = pd.DataFrame(transitions)
+
+            # Create CSV export
+            csv_export = create_csv_download_data(
+                state.processed_dataframe or pd.DataFrame(),
+                f"dormant_to_active_transitions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            )
+
+            state.analysis_results = {
+                'description': 'Dormant to active transitions monitoring',
+                'compliance_article': self.cbuae_article,
+                'status': self.ui_status.value,
+                'transitions': transitions,
+                'csv_export': csv_export,
+                'summary_stats': {
+                    'total_processed': len(df),
+                    'transitions_found': len(transitions)
+                }
+            }
+
+            return state
+
+        except Exception as e:
+            state.agent_status = AgentStatus.FAILED
+            state.error_log.append({
+                "timestamp": datetime.now().isoformat(),
+                "error": str(e),
+                "stage": "dormant_to_active_transitions_analysis"
+            })
+            logger.error(f"Dormant to active transitions analysis failed: {e}")
+            return state
+
+# ===== ORCHESTRATOR CLASS =====
+
+class DormancyWorkflowOrchestrator:
+    """Orchestrator for all dormancy analysis agents"""
+
+    def __init__(self):
+        self.agents = {
+            'safe_deposit_dormancy': SafeDepositDormancyAgent(),
+            'investment_account_inactivity': InvestmentAccountInactivityAgent(),
+            'fixed_deposit_inactivity': FixedDepositInactivityAgent(),
+            'demand_deposit_inactivity': DemandDepositInactivityAgent(),
+            'unclaimed_payment_instruments': UnclaimedPaymentInstrumentsAgent(),
+            'eligible_for_cbuae_transfer': EligibleForCBUAETransferAgent(),
+            'article_3_process_needed': Article3ProcessNeededAgent(),
+            'contact_attempts_needed': ContactAttemptsNeededAgent(),
+            'high_value_dormant': HighValueDormantAgent(),
+            'dormant_to_active_transitions': DormantToActiveTransitionsAgent()
+        }
+
+    async def run_comprehensive_analysis(self, state) -> Dict:
+        """Run comprehensive analysis with all agents"""
+        try:
+            start_time = datetime.now()
+
+            results = {
+                "success": True,
+                "session_id": state.session_id if hasattr(state, 'session_id') else secrets.token_hex(8),
+                "agent_results": {},
+                "csv_exports": {},
+                "summary": {},
+                "processing_time": 0.0
+            }
+
+            # Execute all agents
+            for agent_name, agent in self.agents.items():
+                try:
+                    # Create agent state
+                    agent_state = agent.create_agent_state(
+                        user_id=state.user_id if hasattr(state, 'user_id') else "default_user",
+                        dataframe=state.raw_data if hasattr(state, 'raw_data') else state
+                    )
+
+                    # Run agent analysis
+                    result_state = await agent.analyze_dormancy(agent_state)
+
+                    # Store results
+                    results["agent_results"][agent_name] = {
+                        'agent_type': result_state.agent_type,
+                        'records_processed': result_state.records_processed,
+                        'dormant_records_found': result_state.dormant_records_found,
+                        'processing_time': result_state.processing_time,
+                        'success': result_state.agent_status == AgentStatus.COMPLETED,
+                        'analysis_results': result_state.analysis_results,
+                        'processed_dataframe': result_state.processed_dataframe,
+                        'ui_status': agent.ui_status.value,
+                        'cbuae_article': agent.cbuae_article
+                    }
+
+                    # Store CSV export data
+                    if result_state.analysis_results and 'csv_export' in result_state.analysis_results:
+                        results["csv_exports"][agent_name] = result_state.analysis_results['csv_export']
+
+                except Exception as e:
+                    logger.error(f"Agent {agent_name} failed: {e}")
+                    results["agent_results"][agent_name] = {
+                        'success': False,
+                        'error': str(e),
+                        'records_processed': 0,
+                        'dormant_records_found': 0,
+                        'ui_status': 'failed',
+                        'cbuae_article': 'Unknown'
+                    }
+
+            # Create summary
+            total_processed = sum([r.get('records_processed', 0) for r in results["agent_results"].values()])
+            total_dormant = sum([r.get('dormant_records_found', 0) for r in results["agent_results"].values()])
+
+            results["summary"] = {
+                "total_accounts_analyzed": total_processed,
+                "total_dormant_accounts_found": total_dormant,
+                "agents_executed": len([r for r in results["agent_results"].values() if r.get('success', False)]),
+                "csv_exports_available": len(results["csv_exports"]),
+                "processing_time": (datetime.now() - start_time).total_seconds()
+            }
+
+            results["processing_time"] = results["summary"]["processing_time"]
 
             return results
 
         except Exception as e:
-            logger.error(f"Complete analysis failed: {e}")
+            logger.error(f"Comprehensive analysis failed: {e}")
             return {
-                'analysis_completed': False,
-                'error': str(e),
-                'validation_results': validation if 'validation' in locals() else {}
+                "success": False,
+                "error": str(e),
+                "agent_results": {},
+                "csv_exports": {}
             }
 
-class BankingComplianceSystem:
-    """Fixed Banking Compliance System with proper initialization"""
+    def get_agent_by_name(self, agent_name: str):
+        """Get agent by name for individual execution"""
+        return self.agents.get(agent_name)
 
-    def __init__(self):
-        self.shutdown_event = asyncio.Event()
-        self.logger = self._setup_logger()
+    def get_all_agent_info(self) -> Dict:
+        """Get information about all available agents"""
+        agent_info = {}
+        for name, agent in self.agents.items():
+            agent_info[name] = {
+                'agent_type': agent.agent_type,
+                'cbuae_article': agent.cbuae_article,
+                'ui_status': agent.ui_status.value,
+                'description': f"{agent.agent_type.replace('_', ' ').title()} Analysis"
+            }
+        return agent_info
 
-        # Only set signal handlers if we're in the main thread
-        if threading.current_thread() is threading.main_thread():
-            try:
-                signal.signal(signal.SIGINT, self._signal_handler)
-                signal.signal(signal.SIGTERM, self._signal_handler)
-                self.logger.info("Signal handlers registered successfully")
-            except ValueError as e:
-                self.logger.warning(f"Could not register signal handlers: {e}")
-        else:
-            self.logger.info("Skipping signal handler registration - not in main thread")
+# ===== MAIN EXECUTION FUNCTIONS =====
 
-        # Initialize components safely
-        self._initialize_components()
-
-    def _signal_handler(self, signum, frame):
-        """Handle shutdown signals"""
-        self.logger.info(f"Received signal {signum}, initiating graceful shutdown...")
-        if not self.shutdown_event.is_set():
-            self.shutdown_event.set()
-
-    def _initialize_components(self):
-        """Initialize system components safely"""
-        try:
-            # Initialize memory agent and other components here
-            self.memory_agent = None  # Initialize properly
-            self.mcp_client = None    # Initialize properly
-            self.logger.info("Components initialized successfully")
-        except Exception as e:
-            self.logger.error(f"Component initialization failed: {e}")
-            raise
-
-# Fixed main function structure
-async def main():
-    """Fixed main function that doesn't conflict with signal handlers"""
+async def run_comprehensive_dormancy_analysis_with_csv(user_id: str, account_data: pd.DataFrame,
+                                                      report_date: str = None) -> Dict:
+    """Run comprehensive dormancy analysis with CSV export capability"""
     try:
-        # Don't initialize BankingComplianceSystem in async context
-        # Instead, use a factory pattern or initialize in main thread
-        await demonstrate_system_fixed()
-    except Exception as e:
-        logger.error(f"Main execution failed: {e}")
-        raise
+        # Initialize orchestrator
+        orchestrator = DormancyWorkflowOrchestrator()
 
-async def demonstrate_system_fixed():
-    """Fixed demonstration system without signal handler conflicts"""
-    logger.info("Starting system demonstration...")
+        # Create mock state object
+        class MockState:
+            def __init__(self):
+                self.session_id = secrets.token_hex(16)
+                self.user_id = user_id
+                self.raw_data = account_data
 
-    # Instead of creating BankingComplianceSystem here,
-    # work with components directly or use a different approach
-    try:
-        # Your demonstration logic here
-        logger.info("System demonstration completed successfully")
-    except Exception as e:
-        logger.error(f"System demonstration failed: {e}")
-        raise
+        state = MockState()
 
-# Alternative approach: Initialize in main thread before async operations
-def main_sync():
-    """Synchronous main function for proper initialization"""
-    try:
-        # Initialize system components in main thread
-        system = BankingComplianceSystem()
+        # Execute comprehensive analysis
+        result = await orchestrator.run_comprehensive_analysis(state)
 
-        # Then run async operations
-        asyncio.run(async_operations(system))
+        return result
 
     except Exception as e:
-        logger.error(f"System error: {e}")
-        raise
+        logger.error(f"Comprehensive dormancy analysis with CSV failed: {str(e)}")
+        return {
+            "success": False,
+            "error": str(e),
+            "session_id": None,
+            "agent_results": None,
+            "csv_exports": {}
+        }
 
-async def async_operations(system):
-    """Run async operations with pre-initialized system"""
-    # Your async logic here
-    pass
+async def run_individual_agent_analysis(agent_name: str, user_id: str, account_data: pd.DataFrame) -> Dict:
+    """Run individual agent analysis"""
+    try:
+        orchestrator = DormancyWorkflowOrchestrator()
+        agent = orchestrator.get_agent_by_name(agent_name)
 
-if __name__ == "__main__":
-    # Use synchronous main for proper signal handler setup
-    main_sync()
+        if not agent:
+            return {
+                "success": False,
+                "error": f"Agent '{agent_name}' not found",
+                "available_agents": list(orchestrator.agents.keys())
+            }
+
+        # Create agent state
+        agent_state = agent.create_agent_state(user_id, account_data)
+
+        # Run analysis
+        result_state = await agent.analyze_dormancy(agent_state)
+
+        return {
+            "success": result_state.agent_status == AgentStatus.COMPLETED,
+            "agent_name": agent_name,
+            "agent_type": result_state.agent_type,
+            "records_processed": result_state.records_processed,
+            "dormant_records_found": result_state.dormant_records_found,
+            "processing_time": result_state.processing_time,
+            "analysis_results": result_state.analysis_results,
+            "csv_export": result_state.analysis_results.get('csv_export') if result_state.analysis_results else None
+        }
+
+    except Exception as e:
+        logger.error(f"Individual agent analysis failed: {str(e)}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+# ===== CSV UTILITY FUNCTIONS =====
+
+def get_agent_csv_data(agent_results: Dict, agent_name: str) -> Optional[Dict]:
+    """Get CSV export data for a specific agent"""
+    if agent_name in agent_results and 'analysis_results' in agent_results[agent_name]:
+        return agent_results[agent_name]['analysis_results'].get('csv_export')
+    return None
+
+def get_all_csv_download_info(analysis_results: Dict) -> Dict:
+    """Get download information for all agent CSV files"""
+    download_info = {}
+
+    if 'csv_exports' in analysis_results:
+        for agent_name, csv_data in analysis_results['csv_exports'].items():
+            if csv_data.get('available', False):
+                download_info[agent_name] = {
+                    'filename': csv_data['filename'],
+                    'records': csv_data['records'],
+                    'file_size_kb': csv_data['file_size_kb'],
+                    'download_ready': True
+                }
+            else:
+                download_info[agent_name] = {
+                    'download_ready': False,
+                    'reason': 'No data found'
+                }
+
+    return download_info
+
+# ===== MODULE EXPORTS =====
+
+__all__ = [
+    # Base Classes
+    'BaseDormancyAgent',
+    'DormancyWorkflowOrchestrator',
+
+    # UI-Matched Agents (10 total)
+    'SafeDepositDormancyAgent',
+    'InvestmentAccountInactivityAgent',
+    'FixedDepositInactivityAgent',
+    'DemandDepositInactivityAgent',
+    'UnclaimedPaymentInstrumentsAgent',
+    'EligibleForCBUAETransferAgent',
+    'Article3ProcessNeededAgent',
+    'ContactAttemptsNeededAgent',
+    'HighValueDormantAgent',
+    'DormantToActiveTransitionsAgent',
+
+    # Data Classes
+    'AgentResult',
+    'AgentState',
+    'AgentStatus',
+    'DormancyStatus',
+
+    # Main Functions
+    'run_comprehensive_dormancy_analysis_with_csv',
+    'run_individual_agent_analysis',
+
+    # Utility Functions
+    'safe_date_parse',
+    'calculate_dormancy_days',
+    'create_csv_download_data',
+    'get_agent_csv_data',
+    'get_all_csv_download_info'
+]
