@@ -5,7 +5,7 @@ Clean module matching the UI dashboard - No mock responses
 
 import pandas as pd
 import numpy as np
-import asyncio
+
 import secrets
 import logging
 from datetime import datetime, timedelta
@@ -156,7 +156,7 @@ class BaseDormancyAgent:
             agent_status=AgentStatus.IDLE
         )
 
-    async def analyze_dormancy(self, state: AgentState) -> AgentState:
+    def analyze_dormancy(self, state: AgentState) -> AgentState:
         """Base analyze method - to be overridden by subclasses"""
         raise NotImplementedError("Subclasses must implement analyze_dormancy")
 
@@ -170,7 +170,7 @@ class SafeDepositDormancyAgent(BaseDormancyAgent):
         self.cbuae_article = "CBUAE Art. 3.7"
         self.ui_status = DormancyStatus.PENDING_REVIEW
 
-    async def analyze_dormancy(self, state: AgentState) -> AgentState:
+    def analyze_dormancy(self, state: AgentState) -> AgentState:
         """Analyze safe deposit boxes requiring court applications"""
         try:
             start_time = datetime.now()
@@ -254,7 +254,7 @@ class InvestmentAccountInactivityAgent(BaseDormancyAgent):
         self.cbuae_article = "CBUAE Art. 2.2"
         self.ui_status = DormancyStatus.ACTION_REQUIRED
 
-    async def analyze_dormancy(self, state: AgentState) -> AgentState:
+    def analyze_dormancy(self, state: AgentState) -> AgentState:
         """Analyze investment account inactivity requiring customer contact"""
         try:
             start_time = datetime.now()
@@ -340,7 +340,7 @@ class FixedDepositInactivityAgent(BaseDormancyAgent):
         self.cbuae_article = "CBUAE Art. 2.1.2"
         self.ui_status = DormancyStatus.UP_TO_DATE
 
-    async def analyze_dormancy(self, state: AgentState) -> AgentState:
+    def analyze_dormancy(self, state: AgentState) -> AgentState:
         """Analyze fixed deposit maturity monitoring"""
         try:
             start_time = datetime.now()
@@ -426,7 +426,7 @@ class DemandDepositInactivityAgent(BaseDormancyAgent):
         self.cbuae_article = "CBUAE Art. 2.1.1"
         self.ui_status = DormancyStatus.PROCESSING
 
-    async def analyze_dormancy(self, state: AgentState) -> AgentState:
+    def analyze_dormancy(self, state: AgentState) -> AgentState:
         """Analyze demand deposit accounts for dormancy flagging"""
         try:
             start_time = datetime.now()
@@ -512,7 +512,7 @@ class UnclaimedPaymentInstrumentsAgent(BaseDormancyAgent):
         self.cbuae_article = "CBUAE Art. 3.6"
         self.ui_status = DormancyStatus.CRITICAL
 
-    async def analyze_dormancy(self, state: AgentState) -> AgentState:
+    def analyze_dormancy(self, state: AgentState) -> AgentState:
         """Analyze unclaimed payment instruments requiring ledger transfer"""
         try:
             start_time = datetime.now()
@@ -598,7 +598,7 @@ class EligibleForCBUAETransferAgent(BaseDormancyAgent):
         self.cbuae_article = "CBUAE Art. 8"
         self.ui_status = DormancyStatus.READY
 
-    async def analyze_dormancy(self, state: AgentState) -> AgentState:
+    def analyze_dormancy(self, state: AgentState) -> AgentState:
         """Analyze accounts ready for Central Bank transfer"""
         try:
             start_time = datetime.now()
@@ -686,7 +686,7 @@ class Article3ProcessNeededAgent(BaseDormancyAgent):
         self.cbuae_article = "CBUAE Art. 3"
         self.ui_status = DormancyStatus.IN_PROGRESS
 
-    async def analyze_dormancy(self, state: AgentState) -> AgentState:
+    def analyze_dormancy(self, state: AgentState) -> AgentState:
         """Analyze accounts requiring Article 3 dormancy processes"""
         try:
             start_time = datetime.now()
@@ -765,7 +765,7 @@ class ContactAttemptsNeededAgent(BaseDormancyAgent):
         self.cbuae_article = "CBUAE Art. 5"
         self.ui_status = DormancyStatus.URGENT
 
-    async def analyze_dormancy(self, state: AgentState) -> AgentState:
+    def analyze_dormancy(self, state: AgentState) -> AgentState:
         """Analyze accounts requiring customer contact attempts"""
         try:
             start_time = datetime.now()
@@ -850,7 +850,7 @@ class HighValueDormantAgent(BaseDormancyAgent):
         self.cbuae_article = "Risk Management"
         self.ui_status = DormancyStatus.PRIORITY
 
-    async def analyze_dormancy(self, state: AgentState) -> AgentState:
+    def analyze_dormancy(self, state: AgentState) -> AgentState:
         """Analyze high value dormant accounts requiring escalated monitoring"""
         try:
             start_time = datetime.now()
@@ -936,7 +936,7 @@ class DormantToActiveTransitionsAgent(BaseDormancyAgent):
         self.cbuae_article = "Monitoring"
         self.ui_status = DormancyStatus.MONITORED
 
-    async def analyze_dormancy(self, state: AgentState) -> AgentState:
+    def analyze_dormancy(self, state: AgentState) -> AgentState:
         """Analyze accounts transitioning from dormant to active status"""
         try:
             start_time = datetime.now()
@@ -1032,7 +1032,7 @@ class DormancyWorkflowOrchestrator:
             'dormant_to_active_transitions': DormantToActiveTransitionsAgent()
         }
 
-    async def run_comprehensive_analysis(self, state) -> Dict:
+    def run_comprehensive_analysis(self, state) -> Dict:
         """Run comprehensive analysis with all agents"""
         try:
             start_time = datetime.now()
@@ -1056,7 +1056,7 @@ class DormancyWorkflowOrchestrator:
                     )
 
                     # Run agent analysis
-                    result_state = await agent.analyze_dormancy(agent_state)
+                    result_state = agent.analyze_dormancy(agent_state)
 
                     # Store results
                     results["agent_results"][agent_name] = {
@@ -1129,7 +1129,7 @@ class DormancyWorkflowOrchestrator:
 
 # ===== MAIN EXECUTION FUNCTIONS =====
 
-async def run_comprehensive_dormancy_analysis_with_csv(user_id: str, account_data: pd.DataFrame,
+def run_comprehensive_dormancy_analysis_with_csv(user_id: str, account_data: pd.DataFrame,
                                                       report_date: str = None) -> Dict:
     """Run comprehensive dormancy analysis with CSV export capability"""
     try:
@@ -1146,7 +1146,7 @@ async def run_comprehensive_dormancy_analysis_with_csv(user_id: str, account_dat
         state = MockState()
 
         # Execute comprehensive analysis
-        result = await orchestrator.run_comprehensive_analysis(state)
+        result = orchestrator.run_comprehensive_analysis(state)
 
         return result
 
@@ -1160,7 +1160,7 @@ async def run_comprehensive_dormancy_analysis_with_csv(user_id: str, account_dat
             "csv_exports": {}
         }
 
-async def run_individual_agent_analysis(agent_name: str, user_id: str, account_data: pd.DataFrame) -> Dict:
+def run_individual_agent_analysis(agent_name: str, user_id: str, account_data: pd.DataFrame) -> Dict:
     """Run individual agent analysis"""
     try:
         orchestrator = DormancyWorkflowOrchestrator()
@@ -1177,7 +1177,7 @@ async def run_individual_agent_analysis(agent_name: str, user_id: str, account_d
         agent_state = agent.create_agent_state(user_id, account_data)
 
         # Run analysis
-        result_state = await agent.analyze_dormancy(agent_state)
+        result_state = agent.analyze_dormancy(agent_state)
 
         return {
             "success": result_state.agent_status == AgentStatus.COMPLETED,

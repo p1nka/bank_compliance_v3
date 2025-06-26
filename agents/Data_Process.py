@@ -2,26 +2,25 @@
 Unified Data Processing Agent for Banking Compliance Analysis
 FIXED VERSION - Critical issues resolved
 Integrates: Data Upload (4 methods), Quality Analysis, BGE Mapping, and Memory Management
+SYNCHRONOUS VERSION - /await removed for Streamlit compatibility
 """
-
-import asyncio
+import os
+from pathlib import Path
 import pandas as pd
-import numpy as np
 import json
 import logging
-import hashlib
 import secrets
-import tempfile
 import io
-import os
-import re
-import requests
+import numpy as np
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple, Union
 from dataclasses import dataclass, asdict
 from enum import Enum
-from pathlib import Path
+import re
+import tempfile
+import requests
 from urllib.parse import urlparse
+
 
 # Configure logging FIRST
 logging.basicConfig(level=logging.INFO)
@@ -78,13 +77,13 @@ except ImportError as e:
             def __init__(self, *args, **kwargs):
                 self.config = kwargs.get('config', {})
 
-            async def store_memory(self, *args, **kwargs):
+            def store_memory(self, *args, **kwargs):
                 return {"success": False, "error": "Memory agent not available"}
 
-            async def retrieve_memory(self, *args, **kwargs):
+            def retrieve_memory(self, *args, **kwargs):
                 return {"success": False, "error": "Memory agent not available"}
 
-            async def create_memory_context(self, *args, **kwargs):
+            def create_memory_context(self, *args, **kwargs):
                 return DummyMemoryContext()
 
             def get_statistics(self):
@@ -209,14 +208,14 @@ class UnifiedDataProcessingAgent:
                 try:
                     from mcp_client import MCPClient
                     mcp_client = MCPClient()
-                    self.memory_agent = HybridMemoryAgent(mcp_client, self.config.get("memory_config", {}))
+                    self.memory_agent = HybridMemoryAgent(config)
                 except ImportError:
                     # Create without MCP client
-                    self.memory_agent = HybridMemoryAgent(None, self.config.get("memory_config", {}))
+                    self.memory_agent = HybridMemoryAgent(config)
                 logger.info("✅ Memory agent initialized")
             except Exception as e:
                 logger.warning(f"Memory agent initialization failed: {e}")
-                self.memory_agent = HybridMemoryAgent(None, {})
+                self.memory_agent = HybridMemoryAgent({})
 
         # Initialize BGE model for semantic mapping
         self.bge_model = None
@@ -783,7 +782,7 @@ class UnifiedDataProcessingAgent:
 
     # =================== DATA UPLOAD METHODS ===================
 
-    async def upload_data(self, upload_method: str, source: Union[str, io.IOBase],
+    def upload_data(self, upload_method: str, source: Union[str, io.IOBase],
                          user_id: str, session_id: str, **kwargs) -> UploadResult:
         """Main upload method supporting 4 different data sources"""
         start_time = datetime.now()
@@ -795,7 +794,7 @@ class UnifiedDataProcessingAgent:
             memory_context = None
             if self.memory_agent and MEMORY_AGENT_AVAILABLE:
                 try:
-                    memory_context = await self.memory_agent.create_memory_context(
+                    memory_context = self.memory_agent.create_memory_context(
                         user_id=user_id,
                         session_id=session_id,
                         agent_name="unified_data_processing",
@@ -805,17 +804,17 @@ class UnifiedDataProcessingAgent:
                     logger.warning(f"Memory context creation failed: {e}")
 
             # Load previous upload patterns from memory
-            upload_patterns = await self._load_upload_patterns(memory_context)
+            upload_patterns = self._load_upload_patterns(memory_context)
 
             # Route to appropriate upload method
             if upload_method.lower() == 'file':
-                result = await self._upload_flat_file(source, **kwargs)
+                result = self._upload_flat_file(source, **kwargs)
             elif upload_method.lower() == 'drive':
-                result = await self._upload_from_drive(source, **kwargs)
+                result = self._upload_from_drive(source, **kwargs)
             elif upload_method.lower() == 'datalake':
-                result = await self._upload_from_datalake(source, **kwargs)
+                result = self._upload_from_datalake(source, **kwargs)
             elif upload_method.lower() == 'hdfs':
-                result = await self._upload_from_hdfs(source, **kwargs)
+                result = self._upload_from_hdfs(source, **kwargs)
             else:
                 return UploadResult(
                     success=False,
@@ -829,7 +828,7 @@ class UnifiedDataProcessingAgent:
             # Store upload results in memory (SAFE)
             if result.success and self.memory_agent and MEMORY_AGENT_AVAILABLE:
                 try:
-                    await self._store_upload_results(result, memory_context, upload_method)
+                    self._store_upload_results(result, memory_context, upload_method)
                 except Exception as e:
                     logger.warning(f"Failed to store upload results: {e}")
 
@@ -847,20 +846,20 @@ class UnifiedDataProcessingAgent:
                 processing_time=(datetime.now() - start_time).total_seconds()
             )
 
-    async def _upload_flat_file(self, source: Union[str, io.IOBase], **kwargs) -> UploadResult:
+    def _upload_flat_file(self, source: Union[str, io.IOBase], **kwargs) -> UploadResult:
         """Upload from flat files (CSV, Excel, JSON, Parquet)"""
         try:
             # Handle different source types
             if hasattr(source, 'read'):
                 # File-like object (e.g., Streamlit file uploader)
-                return await self._process_file_object(source, **kwargs)
+                return self._process_file_object(source, **kwargs)
             elif isinstance(source, str):
                 if source.startswith(('http://', 'https://')):
                     # URL
-                    return await self._process_url(source, **kwargs)
+                    return self._process_url(source, **kwargs)
                 else:
                     # Local file path
-                    return await self._process_local_file(source, **kwargs)
+                    return self._process_local_file(source, **kwargs)
             else:
                 return UploadResult(
                     success=False,
@@ -871,7 +870,7 @@ class UnifiedDataProcessingAgent:
             logger.error(f"Flat file upload failed: {str(e)}")
             return UploadResult(success=False, error=str(e))
 
-    async def _process_local_file(self, file_path: str, **kwargs) -> UploadResult:
+    def _process_local_file(self, file_path: str, **kwargs) -> UploadResult:
         """Process local file"""
         path_obj = Path(file_path)
 
@@ -887,13 +886,13 @@ class UnifiedDataProcessingAgent:
             )
 
         # Read file
-        data = await self._read_file_by_extension(str(path_obj), file_extension, **kwargs)
+        data = self._read_file_by_extension(str(path_obj), file_extension, **kwargs)
 
         if data is None:
             return UploadResult(success=False, error="Failed to read file")
 
         # Process and validate
-        processed_data, warnings = await self._process_banking_data(data)
+        processed_data, warnings = self._process_banking_data(data)
 
         # Generate metadata
         file_stats = path_obj.stat()
@@ -916,7 +915,7 @@ class UnifiedDataProcessingAgent:
             warnings=warnings
         )
 
-    async def _process_file_object(self, file_obj, **kwargs) -> UploadResult:
+    def _process_file_object(self, file_obj, **kwargs) -> UploadResult:
         """Process file-like object (e.g., Streamlit upload)"""
         try:
             # Reset file pointer
@@ -929,13 +928,13 @@ class UnifiedDataProcessingAgent:
                 file_extension = Path(file_obj.name).suffix.lower()
 
             # Read file
-            data = await self._read_file_by_extension(file_obj, file_extension, **kwargs)
+            data = self._read_file_by_extension(file_obj, file_extension, **kwargs)
 
             if data is None:
                 return UploadResult(success=False, error="Failed to read file object")
 
             # Process and validate
-            processed_data, warnings = await self._process_banking_data(data)
+            processed_data, warnings = self._process_banking_data(data)
 
             metadata = {
                 'source_type': 'file_object',
@@ -956,7 +955,7 @@ class UnifiedDataProcessingAgent:
         except Exception as e:
             return UploadResult(success=False, error=f"File object processing failed: {str(e)}")
 
-    async def _process_url(self, url: str, **kwargs) -> UploadResult:
+    def _process_url(self, url: str, **kwargs) -> UploadResult:
         """Process file from URL"""
         try:
             # Parse URL to determine file type
@@ -980,13 +979,13 @@ class UnifiedDataProcessingAgent:
 
             try:
                 # Read file
-                data = await self._read_file_by_extension(tmp_file_path, file_extension, **kwargs)
+                data = self._read_file_by_extension(tmp_file_path, file_extension, **kwargs)
 
                 if data is None:
                     return UploadResult(success=False, error="Failed to read downloaded file")
 
                 # Process and validate
-                processed_data, warnings = await self._process_banking_data(data)
+                processed_data, warnings = self._process_banking_data(data)
 
                 metadata = {
                     'source_type': 'url',
@@ -1015,7 +1014,7 @@ class UnifiedDataProcessingAgent:
         except Exception as e:
             return UploadResult(success=False, error=f"URL processing failed: {str(e)}")
 
-    async def _upload_from_drive(self, drive_link: str, **kwargs) -> UploadResult:
+    def _upload_from_drive(self, drive_link: str, **kwargs) -> UploadResult:
         """Upload from Google Drive sharing link"""
         if not CLOUD_DEPENDENCIES_AVAILABLE:
             return UploadResult(
@@ -1047,12 +1046,12 @@ class UnifiedDataProcessingAgent:
                     tmp_file_path = tmp_file.name
 
                 try:
-                    data = await self._read_file_by_extension(tmp_file_path, file_extension, **kwargs)
+                    data = self._read_file_by_extension(tmp_file_path, file_extension, **kwargs)
 
                     if data is None:
                         return UploadResult(success=False, error="Failed to read Google Drive file")
 
-                    processed_data, warnings = await self._process_banking_data(data)
+                    processed_data, warnings = self._process_banking_data(data)
 
                     metadata = {
                         'source_type': 'google_drive',
@@ -1084,7 +1083,7 @@ class UnifiedDataProcessingAgent:
         except Exception as e:
             return UploadResult(success=False, error=f"Google Drive upload failed: {str(e)}")
 
-    async def _upload_from_datalake(self, data_path: str, **kwargs) -> UploadResult:
+    def _upload_from_datalake(self, data_path: str, **kwargs) -> UploadResult:
         """Upload from Data Lake (Azure Data Lake or AWS S3)"""
         if not CLOUD_DEPENDENCIES_AVAILABLE:
             return UploadResult(
@@ -1095,16 +1094,16 @@ class UnifiedDataProcessingAgent:
         platform = kwargs.get('platform', 'azure').lower()
 
         if platform == 'azure':
-            return await self._upload_from_azure(data_path, **kwargs)
+            return self._upload_from_azure(data_path, **kwargs)
         elif platform == 'aws':
-            return await self._upload_from_s3(data_path, **kwargs)
+            return self._upload_from_s3(data_path, **kwargs)
         else:
             return UploadResult(
                 success=False,
                 error=f"Unsupported data lake platform: {platform}"
             )
 
-    async def _upload_from_azure(self, data_path: str, **kwargs) -> UploadResult:
+    def _upload_from_azure(self, data_path: str, **kwargs) -> UploadResult:
         """Upload from Azure Data Lake/Blob Storage"""
         try:
             # Get Azure configuration
@@ -1136,12 +1135,12 @@ class UnifiedDataProcessingAgent:
                 tmp_file_path = tmp_file.name
 
             try:
-                data = await self._read_file_by_extension(tmp_file_path, file_extension, **kwargs)
+                data = self._read_file_by_extension(tmp_file_path, file_extension, **kwargs)
 
                 if data is None:
                     return UploadResult(success=False, error="Failed to read Azure blob")
 
-                processed_data, warnings = await self._process_banking_data(data)
+                processed_data, warnings = self._process_banking_data(data)
 
                 metadata = {
                     'source_type': 'azure_datalake',
@@ -1168,7 +1167,7 @@ class UnifiedDataProcessingAgent:
         except Exception as e:
             return UploadResult(success=False, error=f"Azure Data Lake upload failed: {str(e)}")
 
-    async def _upload_from_s3(self, data_path: str, **kwargs) -> UploadResult:
+    def _upload_from_s3(self, data_path: str, **kwargs) -> UploadResult:
         """Upload from AWS S3"""
         try:
             # Get AWS configuration
@@ -1203,12 +1202,12 @@ class UnifiedDataProcessingAgent:
                 tmp_file_path = tmp_file.name
 
             try:
-                data = await self._read_file_by_extension(tmp_file_path, file_extension, **kwargs)
+                data = self._read_file_by_extension(tmp_file_path, file_extension, **kwargs)
 
                 if data is None:
                     return UploadResult(success=False, error="Failed to read S3 object")
 
-                processed_data, warnings = await self._process_banking_data(data)
+                processed_data, warnings = self._process_banking_data(data)
 
                 metadata = {
                     'source_type': 'aws_s3',
@@ -1233,7 +1232,7 @@ class UnifiedDataProcessingAgent:
         except Exception as e:
             return UploadResult(success=False, error=f"AWS S3 upload failed: {str(e)}")
 
-    async def _upload_from_hdfs(self, hdfs_path: str, **kwargs) -> UploadResult:
+    def _upload_from_hdfs(self, hdfs_path: str, **kwargs) -> UploadResult:
         """Upload from HDFS"""
         if not CLOUD_DEPENDENCIES_AVAILABLE:
             return UploadResult(success=False, error="HDFS dependencies not available")
@@ -1264,12 +1263,12 @@ class UnifiedDataProcessingAgent:
                 tmp_file_path = tmp_file.name
 
             try:
-                data = await self._read_file_by_extension(tmp_file_path, file_extension, **kwargs)
+                data = self._read_file_by_extension(tmp_file_path, file_extension, **kwargs)
 
                 if data is None:
                     return UploadResult(success=False, error="Failed to read HDFS file")
 
-                processed_data, warnings = await self._process_banking_data(data)
+                processed_data, warnings = self._process_banking_data(data)
 
                 metadata = {
                     'source_type': 'hdfs',
@@ -1297,7 +1296,7 @@ class UnifiedDataProcessingAgent:
 
     # =================== DATA QUALITY ANALYSIS ===================
 
-    async def analyze_data_quality(self, data: pd.DataFrame, user_id: str,
+    def analyze_data_quality(self, data: pd.DataFrame, user_id: str,
                                   session_id: str, **kwargs) -> QualityResult:
         """Comprehensive data quality analysis"""
         start_time = datetime.now()
@@ -1312,7 +1311,7 @@ class UnifiedDataProcessingAgent:
             memory_context = None
             if self.memory_agent and MEMORY_AGENT_AVAILABLE:
                 try:
-                    memory_context = await self.memory_agent.create_memory_context(
+                    memory_context = self.memory_agent.create_memory_context(
                         user_id=user_id,
                         session_id=session_id,
                         agent_name="unified_data_processing",
@@ -1322,14 +1321,14 @@ class UnifiedDataProcessingAgent:
                     logger.warning(f"Memory context creation failed: {e}")
 
             # Load quality benchmarks from memory
-            quality_benchmarks = await self._load_quality_benchmarks(memory_context)
+            quality_benchmarks = self._load_quality_benchmarks(memory_context)
 
             # Perform quality analysis
-            completeness_score = await self._assess_completeness(data)
-            accuracy_score = await self._assess_accuracy(data)
-            consistency_score = await self._assess_consistency(data)
-            validity_score = await self._assess_validity(data)
-            uniqueness_score = await self._assess_uniqueness(data)
+            completeness_score =  self._assess_completeness(data)
+            accuracy_score =  self._assess_accuracy(data)
+            consistency_score = self._assess_consistency(data)
+            validity_score = self._assess_validity(data)
+            uniqueness_score = self._assess_uniqueness(data)
 
             # Calculate overall score
             weights = {
@@ -1365,7 +1364,7 @@ class UnifiedDataProcessingAgent:
             duplicate_records = data.duplicated().sum()
 
             # Generate recommendations
-            recommendations = await self._generate_quality_recommendations(metrics, data)
+            recommendations = self._generate_quality_recommendations(metrics, data)
 
             processing_time = (datetime.now() - start_time).total_seconds()
 
@@ -1383,7 +1382,7 @@ class UnifiedDataProcessingAgent:
             # Store quality results in memory SAFELY
             if self.memory_agent and MEMORY_AGENT_AVAILABLE:
                 try:
-                    await self._store_quality_results(result, memory_context, data)
+                    self._store_quality_results(result, memory_context, data)
                 except Exception as e:
                     logger.warning(f"Failed to store quality results: {e}")
 
@@ -1401,7 +1400,7 @@ class UnifiedDataProcessingAgent:
                 processing_time=(datetime.now() - start_time).total_seconds()
             )
 
-    async def _assess_completeness(self, data: pd.DataFrame) -> float:
+    def _assess_completeness(self, data: pd.DataFrame) -> float:
         """Assess data completeness"""
         if data.empty:
             return 0.0
@@ -1410,7 +1409,7 @@ class UnifiedDataProcessingAgent:
         non_null_cells = data.count().sum()
         return non_null_cells / total_cells if total_cells > 0 else 0.0
 
-    async def _assess_accuracy(self, data: pd.DataFrame) -> float:
+    def _assess_accuracy(self, data: pd.DataFrame) -> float:
         """Assess data accuracy based on business rules"""
         if data.empty:
             return 0.0
@@ -1438,7 +1437,7 @@ class UnifiedDataProcessingAgent:
 
         return np.mean(accuracy_checks) if accuracy_checks else 1.0
 
-    async def _assess_consistency(self, data: pd.DataFrame) -> float:
+    def _assess_consistency(self, data: pd.DataFrame) -> float:
         """Assess data consistency"""
         if data.empty:
             return 0.0
@@ -1459,7 +1458,7 @@ class UnifiedDataProcessingAgent:
 
         return consistency_score
 
-    async def _assess_validity(self, data: pd.DataFrame) -> float:
+    def _assess_validity(self, data: pd.DataFrame) -> float:
         """Assess data validity against banking schema"""
         if data.empty:
             return 0.0
@@ -1474,7 +1473,7 @@ class UnifiedDataProcessingAgent:
 
         return np.mean(validity_checks) if validity_checks else 0.0
 
-    async def _assess_uniqueness(self, data: pd.DataFrame) -> float:
+    def _assess_uniqueness(self, data: pd.DataFrame) -> float:
         """Assess data uniqueness"""
         if data.empty:
             return 0.0
@@ -1495,7 +1494,7 @@ class UnifiedDataProcessingAgent:
 
         return np.mean(uniqueness_scores) if uniqueness_scores else 0.8
 
-    async def _generate_quality_recommendations(self, metrics: Dict[str, float], data: pd.DataFrame) -> List[str]:
+    def _generate_quality_recommendations(self, metrics: Dict[str, float], data: pd.DataFrame) -> List[str]:
         """Generate quality improvement recommendations"""
         recommendations = []
 
@@ -1525,7 +1524,7 @@ class UnifiedDataProcessingAgent:
 
     # =================== COLUMN MAPPING WITH BGE ===================
 
-    async def map_columns(self, data: pd.DataFrame, user_id: str, session_id: str,
+    def map_columns(self, data: pd.DataFrame, user_id: str, session_id: str,
                          use_llm: bool = False, llm_api_key: Optional[str] = None, **kwargs) -> MappingResult:
         """Map data columns to banking schema using BGE embeddings and cosine similarity"""
         start_time = datetime.now()
@@ -1540,7 +1539,7 @@ class UnifiedDataProcessingAgent:
             memory_context = None
             if self.memory_agent and MEMORY_AGENT_AVAILABLE:
                 try:
-                    memory_context = await self.memory_agent.create_memory_context(
+                    memory_context = self.memory_agent.create_memory_context(
                         user_id=user_id,
                         session_id=session_id,
                         agent_name="unified_data_processing",
@@ -1550,7 +1549,7 @@ class UnifiedDataProcessingAgent:
                     logger.warning(f"Memory context creation failed: {e}")
 
             # Load mapping patterns from memory
-            mapping_patterns = await self._load_mapping_patterns(memory_context)
+            mapping_patterns = self._load_mapping_patterns(memory_context)
 
             # Perform mapping
             mappings = {}
@@ -1559,18 +1558,18 @@ class UnifiedDataProcessingAgent:
             if BGE_AVAILABLE and self.bge_model:
                 try:
                     # Perform BGE-based semantic mapping
-                    mappings = await self._perform_bge_mapping(data.columns.tolist())
+                    mappings = self._perform_bge_mapping(data.columns.tolist())
                     method = "BGE Semantic"
                 except Exception as e:
                     logger.warning(f"BGE mapping failed, falling back to keyword: {e}")
 
             # Apply keyword-based mapping as fallback
             if not mappings:
-                mappings = await self._perform_keyword_mapping(data.columns.tolist())
+                mappings = self._perform_keyword_mapping(data.columns.tolist())
                 method = "Keyword-based"
 
             # Create mapping sheet
-            mapping_sheet = await self._create_mapping_sheet(data.columns.tolist(), mappings)
+            mapping_sheet = self._create_mapping_sheet(data.columns.tolist(), mappings)
 
             # Calculate statistics
             auto_mapping_percentage = (len(mappings) / len(data.columns)) * 100 if len(data.columns) > 0 else 0
@@ -1586,7 +1585,7 @@ class UnifiedDataProcessingAgent:
             # Enhance with LLM if requested
             if use_llm and llm_api_key:
                 try:
-                    enhanced_mappings = await self._enhance_with_llm(mapping_sheet, llm_api_key)
+                    enhanced_mappings = self._enhance_with_llm(mapping_sheet, llm_api_key)
                     if enhanced_mappings is not None:
                         mapping_sheet = enhanced_mappings
                         method = f"{method} + LLM Enhanced"
@@ -1606,7 +1605,7 @@ class UnifiedDataProcessingAgent:
             # Store mapping results in memory SAFELY
             if self.memory_agent and MEMORY_AGENT_AVAILABLE:
                 try:
-                    await self._store_mapping_results(result, memory_context, data)
+                    self._store_mapping_results(result, memory_context, data)
                 except Exception as e:
                     logger.warning(f"Failed to store mapping results: {e}")
 
@@ -1624,7 +1623,7 @@ class UnifiedDataProcessingAgent:
                 processing_time=(datetime.now() - start_time).total_seconds()
             )
 
-    async def _perform_bge_mapping(self, source_columns: List[str]) -> Dict[str, str]:
+    def _perform_bge_mapping(self, source_columns: List[str]) -> Dict[str, str]:
         """Perform BGE-based semantic mapping"""
         try:
             if not self.bge_model:
@@ -1677,7 +1676,7 @@ class UnifiedDataProcessingAgent:
             logger.error(f"BGE mapping failed: {e}")
             return {}
 
-    async def _perform_keyword_mapping(self, source_columns: List[str]) -> Dict[str, str]:
+    def _perform_keyword_mapping(self, source_columns: List[str]) -> Dict[str, str]:
         """Perform keyword-based mapping as fallback"""
         mappings = {}
 
@@ -1712,7 +1711,7 @@ class UnifiedDataProcessingAgent:
 
         return mappings
 
-    async def _create_mapping_sheet(self, source_columns: List[str], mappings: Dict[str, str]) -> pd.DataFrame:
+    def _create_mapping_sheet(self, source_columns: List[str], mappings: Dict[str, str]) -> pd.DataFrame:
         """Create detailed mapping sheet"""
         mapping_data = []
 
@@ -1742,7 +1741,7 @@ class UnifiedDataProcessingAgent:
 
         return pd.DataFrame(mapping_data)
 
-    async def _enhance_with_llm(self, mapping_sheet: pd.DataFrame, api_key: str) -> Optional[pd.DataFrame]:
+    def _enhance_with_llm(self, mapping_sheet: pd.DataFrame, api_key: str) -> Optional[pd.DataFrame]:
         """Enhance mapping using LLM (placeholder for now)"""
         # This would integrate with LLM service like Groq
         # For now, return original mapping sheet
@@ -1751,7 +1750,7 @@ class UnifiedDataProcessingAgent:
 
     # =================== MEMORY INTEGRATION (SAFE) ===================
 
-    async def _load_upload_patterns(self, memory_context) -> Dict:
+    def _load_upload_patterns(self, memory_context) -> Dict:
         """Load upload patterns from memory SAFELY"""
         if not self.memory_agent or not memory_context or not MEMORY_AGENT_AVAILABLE:
             return {}
@@ -1759,7 +1758,7 @@ class UnifiedDataProcessingAgent:
         try:
             # Safe bucket access
             bucket = getattr(MemoryBucket, 'KNOWLEDGE', 'knowledge')
-            result = await self.memory_agent.retrieve_memory(
+            result = self.memory_agent.retrieve_memory(
                 bucket=bucket,
                 filter_criteria={
                     "type": "upload_patterns",
@@ -1777,14 +1776,14 @@ class UnifiedDataProcessingAgent:
             logger.warning(f"Failed to load upload patterns: {e}")
             return {}
 
-    async def _load_quality_benchmarks(self, memory_context) -> Dict:
+    def _load_quality_benchmarks(self, memory_context) -> Dict:
         """Load quality benchmarks from memory SAFELY"""
         if not self.memory_agent or not memory_context or not MEMORY_AGENT_AVAILABLE:
             return {}
 
         try:
             bucket = getattr(MemoryBucket, 'KNOWLEDGE', 'knowledge')
-            result = await self.memory_agent.retrieve_memory(
+            result = self.memory_agent.retrieve_memory(
                 bucket=bucket,
                 filter_criteria={
                     "type": "quality_benchmarks",
@@ -1802,14 +1801,14 @@ class UnifiedDataProcessingAgent:
             logger.warning(f"Failed to load quality benchmarks: {e}")
             return {}
 
-    async def _load_mapping_patterns(self, memory_context) -> Dict:
+    def _load_mapping_patterns(self, memory_context) -> Dict:
         """Load mapping patterns from memory SAFELY"""
         if not self.memory_agent or not memory_context or not MEMORY_AGENT_AVAILABLE:
             return {}
 
         try:
             bucket = getattr(MemoryBucket, 'KNOWLEDGE', 'knowledge')
-            result = await self.memory_agent.retrieve_memory(
+            result = self.memory_agent.retrieve_memory(
                 bucket=bucket,
                 filter_criteria={
                     "type": "mapping_patterns",
@@ -1827,7 +1826,7 @@ class UnifiedDataProcessingAgent:
             logger.warning(f"Failed to load mapping patterns: {e}")
             return {}
 
-    async def _store_upload_results(self, result: UploadResult, memory_context, upload_method: str) -> None:
+    def _store_upload_results(self, result: UploadResult, memory_context, upload_method: str) -> None:
         """Store upload results in memory SAFELY"""
         if not self.memory_agent or not result.success or not MEMORY_AGENT_AVAILABLE:
             return
@@ -1845,7 +1844,7 @@ class UnifiedDataProcessingAgent:
             }
 
             bucket = getattr(MemoryBucket, 'SESSION', 'session')
-            await self.memory_agent.store_memory(
+            self.memory_agent.store_memory(
                 bucket=bucket,
                 data=upload_data,
                 context=memory_context,
@@ -1858,7 +1857,7 @@ class UnifiedDataProcessingAgent:
         except Exception as e:
             logger.warning(f"Failed to store upload results: {e}")
 
-    async def _store_quality_results(self, result: QualityResult, memory_context, data: pd.DataFrame) -> None:
+    def _store_quality_results(self, result: QualityResult, memory_context, data: pd.DataFrame) -> None:
         """Store quality results in memory SAFELY"""
         if not self.memory_agent or not result.success or not MEMORY_AGENT_AVAILABLE:
             return
@@ -1880,7 +1879,7 @@ class UnifiedDataProcessingAgent:
             }
 
             session_bucket = getattr(MemoryBucket, 'SESSION', 'session')
-            await self.memory_agent.store_memory(
+            self.memory_agent.store_memory(
                 bucket=session_bucket,
                 data=quality_data,
                 context=memory_context,
@@ -1905,7 +1904,7 @@ class UnifiedDataProcessingAgent:
 
                 knowledge_bucket = getattr(MemoryBucket, 'KNOWLEDGE', 'knowledge')
                 priority = getattr(MemoryPriority, 'HIGH', 'high')
-                await self.memory_agent.store_memory(
+                self.memory_agent.store_memory(
                     bucket=knowledge_bucket,
                     data=knowledge_data,
                     context=memory_context,
@@ -1919,7 +1918,7 @@ class UnifiedDataProcessingAgent:
         except Exception as e:
             logger.warning(f"Failed to store quality results: {e}")
 
-    async def _store_mapping_results(self, result: MappingResult, memory_context, data: pd.DataFrame) -> None:
+    def _store_mapping_results(self, result: MappingResult, memory_context, data: pd.DataFrame) -> None:
         """Store mapping results in memory SAFELY"""
         if not self.memory_agent or not result.success or not MEMORY_AGENT_AVAILABLE:
             return
@@ -1939,7 +1938,7 @@ class UnifiedDataProcessingAgent:
             }
 
             session_bucket = getattr(MemoryBucket, 'SESSION', 'session')
-            await self.memory_agent.store_memory(
+            self.memory_agent.store_memory(
                 bucket=session_bucket,
                 data=mapping_data,
                 context=memory_context,
@@ -1961,7 +1960,7 @@ class UnifiedDataProcessingAgent:
 
                 knowledge_bucket = getattr(MemoryBucket, 'KNOWLEDGE', 'knowledge')
                 priority = getattr(MemoryPriority, 'HIGH', 'high')
-                await self.memory_agent.store_memory(
+                self.memory_agent.store_memory(
                     bucket=knowledge_bucket,
                     data=pattern_data,
                     context=memory_context,
@@ -1977,7 +1976,7 @@ class UnifiedDataProcessingAgent:
 
     # =================== UTILITY METHODS ===================
 
-    async def _read_file_by_extension(self, file_path_or_obj: Union[str, io.IOBase],
+    def _read_file_by_extension(self, file_path_or_obj: Union[str, io.IOBase],
                                      file_extension: str, **kwargs) -> Optional[pd.DataFrame]:
         """Read file based on extension"""
         try:
@@ -1999,7 +1998,7 @@ class UnifiedDataProcessingAgent:
             logger.error(f"Failed to read file: {e}")
             return None
 
-    async def _process_banking_data(self, data: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
+    def _process_banking_data(self, data: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
         """Process and clean banking data"""
         warnings = []
 
@@ -2062,7 +2061,7 @@ class UnifiedDataProcessingAgent:
 
     # =================== COMPREHENSIVE WORKFLOW ===================
 
-    async def process_data_comprehensive(self, upload_method: str, source: Union[str, io.IOBase],
+    def process_data_comprehensive(self, upload_method: str, source: Union[str, io.IOBase],
                                        user_id: str, session_id: str,
                                        run_quality_analysis: bool = True,
                                        run_column_mapping: bool = True,
@@ -2096,7 +2095,7 @@ class UnifiedDataProcessingAgent:
 
             # Step 1: Data Upload
             logger.info(f"Starting comprehensive workflow: Upload via {upload_method}")
-            upload_result = await self.upload_data(upload_method, source, user_id, session_id, **kwargs)
+            upload_result = self.upload_data(upload_method, source, user_id, session_id, **kwargs)
             results["upload_result"] = asdict(upload_result)
 
             if not upload_result.success:
@@ -2108,7 +2107,7 @@ class UnifiedDataProcessingAgent:
             # Step 2: Quality Analysis (optional)
             if run_quality_analysis:
                 logger.info("Running quality analysis...")
-                quality_result = await self.analyze_data_quality(data, user_id, session_id, **kwargs)
+                quality_result = self.analyze_data_quality(data, user_id, session_id, **kwargs)
                 results["quality_result"] = asdict(quality_result)
 
                 if not quality_result.success:
@@ -2117,7 +2116,7 @@ class UnifiedDataProcessingAgent:
             # Step 3: Column Mapping (optional)
             if run_column_mapping:
                 logger.info("Running column mapping...")
-                mapping_result = await self.map_columns(data, user_id, session_id, use_llm_mapping, llm_api_key, **kwargs)
+                mapping_result = self.map_columns(data, user_id, session_id, use_llm_mapping, llm_api_key, **kwargs)
                 results["mapping_result"] = asdict(mapping_result)
 
                 if not mapping_result.success:
@@ -2173,12 +2172,12 @@ def create_unified_data_processing_agent(config: Optional[Dict] = None) -> Unifi
     return UnifiedDataProcessingAgent(config)
 
 
-async def quick_process_data(file_path: str, user_id: str = "default_user") -> Dict[str, Any]:
+def quick_process_data(file_path: str, user_id: str = "default_user") -> Dict[str, Any]:
     """Quick helper function for simple data processing"""
     agent = create_unified_data_processing_agent()
     session_id = secrets.token_hex(8)
 
-    return await agent.process_data_comprehensive(
+    return agent.process_data_comprehensive(
         upload_method="file",
         source=file_path,
         user_id=user_id,
@@ -2190,7 +2189,7 @@ async def quick_process_data(file_path: str, user_id: str = "default_user") -> D
 
 if __name__ == "__main__":
     # Example usage
-    async def main():
+    def main():
         # Create agent
         agent = create_unified_data_processing_agent()
 
@@ -2199,6 +2198,6 @@ if __name__ == "__main__":
         print("Agent Statistics:", json.dumps(stats, indent=2))
 
     # Run example
-    # asyncio.run(main())
+    main()
     print("Unified Data Processing Agent initialized successfully!")
     print("Features: 4 Upload Methods + Quality Analysis + BGE Mapping + Memory Integration")

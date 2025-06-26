@@ -1,9 +1,9 @@
 """
 agents/memory_agent.py - Banking Compliance Memory Management System
-Full-featured memory agent with ALL dependencies required
+Full-featured memory agent with ALL dependencies required.
+Synchronous version, Streamlit-safe.
 """
 
-import asyncio
 import json
 import logging
 import hashlib
@@ -15,24 +15,22 @@ from dataclasses import dataclass, asdict
 from enum import Enum
 import secrets
 import sqlite3
-import aiofiles
 from pathlib import Path
-import faiss
-import st
-from sentence_transformers import SentenceTransformer
-import redis.asyncio as redis
-from cryptography.fernet import Fernet
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 import base64
 
-# LangGraph and LangSmith imports
-from langgraph.graph import StateGraph, END
-from langsmith import traceable, Client as LangSmithClient
+# Optional: For vector search, comment out if not used or install faiss and sentence_transformers.
+try:
+    import faiss
+    from sentence_transformers import SentenceTransformer
+    FAISS_AVAILABLE = True
+except ImportError:
+    FAISS_AVAILABLE = False
 
-# MCP imports
-from mcp_client import MCPClient
-from utils.redis_manager import RedisManager
+try:
+    import redis
+    REDIS_AVAILABLE = True
+except ImportError:
+    REDIS_AVAILABLE = False
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -47,7 +45,6 @@ class MemoryBucket(Enum):
     AUDIT = "audit"
     USER_PROFILE = "user_profile"
 
-
 class MemoryPriority(Enum):
     CRITICAL = "critical"
     HIGH = "high"
@@ -55,14 +52,12 @@ class MemoryPriority(Enum):
     LOW = "low"
     TEMPORARY = "temporary"
 
-
 class MemoryStatus(Enum):
     ACTIVE = "active"
     ARCHIVED = "archived"
     EXPIRED = "expired"
     CORRUPTED = "corrupted"
     PENDING_DELETION = "pending_deletion"
-
 
 @dataclass
 class MemoryContext:
@@ -94,7 +89,6 @@ class MemoryContext:
             self.filter_criteria = {}
         if self.tags is None:
             self.tags = []
-
 
 @dataclass
 class MemoryEntry:
@@ -139,125 +133,10 @@ class MemoryEntry:
         if self.related_entries is None:
             self.related_entries = []
 
-
-class MemoryEncryption:
-    """Handles encryption/decryption of sensitive memory data"""
-
-    def __init__(self, encryption_key: Optional[str] = None):
-        if encryption_key:
-            self.key = encryption_key.encode()
-        else:
-            password = b"banking_compliance_memory_key_2024"
-            salt = b"memory_agent_salt"
-            kdf = PBKDF2HMAC(
-                algorithm=hashes.SHA256(),
-                length=32,
-                salt=salt,
-                iterations=100000,
-            )
-            key = base64.urlsafe_b64encode(kdf.derive(password))
-            self.key = key
-
-        self.fernet = Fernet(self.key)
-
-    def encrypt_data(self, data: Dict) -> str:
-        """Encrypt memory data"""
-        json_data = json.dumps(data, default=str)
-        encrypted_data = self.fernet.encrypt(json_data.encode())
-        return base64.urlsafe_b64encode(encrypted_data).decode()
-
-    def decrypt_data(self, encrypted_data: str) -> Dict:
-        """Decrypt memory data"""
-        decoded_data = base64.urlsafe_b64decode(encrypted_data.encode())
-        decrypted_data = self.fernet.decrypt(decoded_data)
-        return json.loads(decrypted_data.decode())
-
-
-class VectorMemoryStore:
-    """Vector storage for semantic memory search"""
-
-    def __init__(self, dimension: int = 384, index_path: str = "memory_index.faiss"):
-        self.dimension = dimension
-        self.index_path = index_path
-        self.index = faiss.IndexFlatIP(dimension)
-        self.id_mapping = {}
-        self.reverse_mapping = {}
-        self.next_id = 0
-        self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-        self._load_index()
-
-    def _load_index(self):
-        """Load existing FAISS index"""
-        if Path(self.index_path).exists():
-            self.index = faiss.read_index(self.index_path)
-            mapping_path = self.index_path.replace('.faiss', '_mappings.json')
-            if Path(mapping_path).exists():
-                with open(mapping_path, 'r') as f:
-                    mappings = json.load(f)
-                    self.id_mapping = {int(k): v for k, v in mappings.get("id_mapping", {}).items()}
-                    self.reverse_mapping = mappings.get("reverse_mapping", {})
-                    self.next_id = mappings.get("next_id", 0)
-
-    def _save_index(self):
-        """Save FAISS index and mappings"""
-        faiss.write_index(self.index, self.index_path)
-        mapping_path = self.index_path.replace('.faiss', '_mappings.json')
-        mappings = {
-            "id_mapping": self.id_mapping,
-            "reverse_mapping": self.reverse_mapping,
-            "next_id": self.next_id
-        }
-        with open(mapping_path, 'w') as f:
-            json.dump(mappings, f)
-
-    def generate_embedding(self, text: str) -> np.ndarray:
-        """Generate embedding for text"""
-        embedding = self.embedding_model.encode([text])
-        return embedding[0].astype(np.float32)
-
-    def add_entry(self, entry_id: str, text_content: str) -> bool:
-        """Add new entry to vector store"""
-        embedding = self.generate_embedding(text_content)
-        faiss_id = self.next_id
-        self.index.add(embedding.reshape(1, -1))
-        self.id_mapping[faiss_id] = entry_id
-        self.reverse_mapping[entry_id] = faiss_id
-        self.next_id += 1
-        self._save_index()
-        return True
-
-    def search_similar(self, query_text: str, top_k: int = 10, threshold: float = 0.7) -> List[Tuple[str, float]]:
-        """Search for similar entries"""
-        if self.index.ntotal == 0:
-            return []
-
-        query_embedding = self.generate_embedding(query_text)
-        scores, indices = self.index.search(query_embedding.reshape(1, -1), top_k)
-
-        results = []
-        for i, (score, idx) in enumerate(zip(scores[0], indices[0])):
-            if idx == -1:
-                continue
-            if score >= threshold:
-                entry_id = self.id_mapping.get(idx)
-                if entry_id:
-                    results.append((entry_id, float(score)))
-
-        return results
-
-    def remove_entry(self, entry_id: str) -> bool:
-        """Remove entry from vector store"""
-        faiss_id = self.reverse_mapping.get(entry_id)
-        if faiss_id is not None:
-            del self.id_mapping[faiss_id]
-            del self.reverse_mapping[entry_id]
-            self._save_index()
-            return True
-        return False
-
+# -- MemoryDatabase: SQLite Storage --
 
 class MemoryDatabase:
-    """SQLite database for memory storage"""
+    """SQLite database for memory storage (sync)"""
 
     def __init__(self, db_path: str = "memory_store.db"):
         self.db_path = db_path
@@ -267,7 +146,6 @@ class MemoryDatabase:
         """Initialize memory database schema"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS memory_entries (
                     entry_id TEXT PRIMARY KEY,
@@ -291,36 +169,11 @@ class MemoryDatabase:
                     parent_entry TEXT NULL
                 )
             ''')
-
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS memory_metadata (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    entry_id TEXT NOT NULL,
-                    metadata_key TEXT NOT NULL,
-                    metadata_value TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (entry_id) REFERENCES memory_entries (entry_id)
-                )
-            ''')
-
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS memory_access_log (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    entry_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    operation TEXT NOT NULL,
-                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    context TEXT,
-                    FOREIGN KEY (entry_id) REFERENCES memory_entries (entry_id)
-                )
-            ''')
-
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_bucket_user ON memory_entries (bucket, user_id)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_session ON memory_entries (session_id)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_status ON memory_entries (status)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_expires ON memory_entries (expires_at)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_content_type ON memory_entries (content_type)')
-
             conn.commit()
 
     def store_entry(self, entry: MemoryEntry) -> bool:
@@ -355,79 +208,6 @@ class MemoryDatabase:
                 return self._row_to_entry(row)
             return None
 
-    def search_entries(self, bucket: MemoryBucket, user_id: str,
-                       filter_criteria: Dict = None, limit: int = 100) -> List[MemoryEntry]:
-        """Search memory entries with filters"""
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-
-            query = '''
-                SELECT * FROM memory_entries 
-                WHERE bucket = ? AND user_id = ? AND status = 'active'
-            '''
-            params = [bucket.value, user_id]
-
-            if filter_criteria:
-                if filter_criteria.get("session_id"):
-                    query += " AND session_id = ?"
-                    params.append(filter_criteria["session_id"])
-
-                if filter_criteria.get("content_type"):
-                    query += " AND content_type = ?"
-                    params.append(filter_criteria["content_type"])
-
-                if filter_criteria.get("priority"):
-                    query += " AND priority = ?"
-                    params.append(filter_criteria["priority"])
-
-                if filter_criteria.get("tags"):
-                    for tag in filter_criteria["tags"]:
-                        query += " AND tags LIKE ?"
-                        params.append(f'%"{tag}"%')
-
-                if filter_criteria.get("created_after"):
-                    query += " AND created_at > ?"
-                    params.append(filter_criteria["created_after"])
-
-            query += " ORDER BY updated_at DESC LIMIT ?"
-            params.append(limit)
-
-            cursor.execute(query, params)
-            rows = cursor.fetchall()
-
-            return [self._row_to_entry(row) for row in rows]
-
-    def update_access(self, entry_id: str):
-        """Update access timestamp and count"""
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                UPDATE memory_entries 
-                SET accessed_at = CURRENT_TIMESTAMP, access_count = access_count + 1
-                WHERE entry_id = ?
-            ''', (entry_id,))
-            conn.commit()
-
-    def delete_entry(self, entry_id: str) -> bool:
-        """Delete memory entry"""
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute('DELETE FROM memory_entries WHERE entry_id = ?', (entry_id,))
-            cursor.execute('DELETE FROM memory_metadata WHERE entry_id = ?', (entry_id,))
-            conn.commit()
-            return cursor.rowcount > 0
-
-    def cleanup_expired(self) -> int:
-        """Clean up expired memory entries"""
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                DELETE FROM memory_entries 
-                WHERE expires_at IS NOT NULL AND expires_at < CURRENT_TIMESTAMP
-            ''')
-            conn.commit()
-            return cursor.rowcount
-
     def _row_to_entry(self, row) -> MemoryEntry:
         """Convert database row to MemoryEntry object"""
         return MemoryEntry(
@@ -452,54 +232,152 @@ class MemoryDatabase:
             parent_entry=row[18]
         )
 
+# -- RedisManager: Synchronous Redis connection --
 
-# agents/memory_agent.py (Enhanced)
-class HybridMemoryAgent:
-    """Enhanced hybrid memory management with robust Redis"""
-
-    def __init__(self, mcp_client: MCPClient, config: Dict):
-        self.mcp_client = mcp_client
+class RedisManager:
+    def __init__(self, config: Dict):
         self.config = config
-
-        # Initialize Redis with error handling
-        self.redis_manager = RedisManager(config)
-        self.redis_client = self.redis_manager.get_client()
-
-        # Fallback mode if Redis is unavailable
-        self.redis_available = self.redis_client is not None
-
-        if not self.redis_available:
-            st.warning("⚠️ Redis unavailable - using fallback mode")
-
-    async def store_memory_with_fallback(self, key: str, data: Dict, ttl: int = 3600):
-        """Store data with Redis fallback to SQLite"""
-        try:
-            if self.redis_available and self.redis_client:
-                # Try Redis first
-                await self.redis_client.setex(
-                    key,
-                    ttl,
-                    json.dumps(data, default=str)
+        self.redis_client = None
+        self.available = False
+        if REDIS_AVAILABLE:
+            try:
+                redis_config = self.config.get("redis", {})
+                self.redis_client = redis.Redis(
+                    host=redis_config.get("host", "localhost"),
+                    port=redis_config.get("port", 6379),
+                    db=redis_config.get("db", 0),
+                    password=redis_config.get("password"),
+                    socket_timeout=redis_config.get("socket_timeout", 5),
+                    decode_responses=True
                 )
-                return True
-        except Exception as e:
-            self.logger.warning(f"Redis storage failed: {e}")
-            self.redis_available = False
+                self.redis_client.ping()
+                self.available = True
+                logger.info("✅ Redis connection established successfully")
+            except Exception as e:
+                self.available = False
+                self.redis_client = None
+                logger.warning(f"⚠️ Redis connection failed: {e}")
 
-        # Fallback to SQLite
-        return await self._store_in_sqlite(key, data)
+    def get_client(self):
+        if self.available and self.redis_client:
+            try:
+                self.redis_client.ping()
+                return self.redis_client
+            except Exception as e:
+                self.available = False
+                logger.warning(f"Redis connection lost: {e}")
+                return None
+        return None
 
-    async def retrieve_memory_with_fallback(self, key: str) -> Optional[Dict]:
-        """Retrieve data with Redis fallback"""
+    def is_available(self):
+        return self.available and self.redis_client is not None
+
+# -- HybridMemoryAgent: Synchronous version --
+
+class HybridMemoryAgent:
+    """Synchronous hybrid memory management with Redis and SQLite fallback."""
+
+    def __init__(self, config: Dict):
+        self.config = config or {}
+        self.db_path = self.config.get("db_path", "memory_store.db")
+        self.memory_db = MemoryDatabase(self.db_path)
+        self.redis_manager = RedisManager(self.config)
+        self.redis_available = self.redis_manager.is_available()
+        self.stats = {
+            "redis_hits": 0,
+            "redis_misses": 0,
+            "sqlite_hits": 0,
+            "sqlite_misses": 0,
+            "total_operations": 0,
+            "redis_errors": 0,
+        }
+        logger.info(f"HybridMemoryAgent initialized. Redis: {self.redis_available}, SQLite: {self.db_path}")
+
+    def store_memory(self, key: str, data: Dict, ttl: int = 3600) -> bool:
+        """Store memory synchronously, Redis preferred, fallback to SQLite."""
+        self.stats["total_operations"] += 1
+        # Try Redis
+        if self.redis_available:
+            try:
+                redis_client = self.redis_manager.get_client()
+                if redis_client:
+                    redis_client.setex(key, ttl, json.dumps(data, default=str))
+                    return True
+            except Exception as e:
+                self.stats["redis_errors"] += 1
+                self.redis_available = False
+                logger.warning(f"Redis storage failed: {e}")
+        # Fallback to SQLite as a simple key/value (not full object support)
         try:
-            if self.redis_available and self.redis_client:
-                # Try Redis first
-                cached_data = await self.redis_client.get(key)
-                if cached_data:
-                    return json.loads(cached_data)
+            entry = MemoryEntry(
+                entry_id=key,
+                bucket=MemoryBucket.SESSION,
+                user_id="default",
+                session_id=None,
+                data=data,
+                content_hash=hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest(),
+                encrypted=False,
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+                accessed_at=datetime.now(),
+                access_count=0
+            )
+            self.memory_db.store_entry(entry)
+            return True
         except Exception as e:
-            self.logger.warning(f"Redis retrieval failed: {e}")
-            self.redis_available = False
+            logger.error(f"SQLite storage failed: {e}")
+            return False
 
+    def retrieve_memory(self, key: str) -> Optional[Dict]:
+        """Retrieve memory synchronously, Redis preferred, fallback to SQLite."""
+        self.stats["total_operations"] += 1
+        if self.redis_available:
+            try:
+                redis_client = self.redis_manager.get_client()
+                if redis_client:
+                    cached_data = redis_client.get(key)
+                    if cached_data:
+                        self.stats["redis_hits"] += 1
+                        return json.loads(cached_data)
+                    else:
+                        self.stats["redis_misses"] += 1
+            except Exception as e:
+                self.stats["redis_errors"] += 1
+                self.redis_available = False
+                logger.warning(f"Redis retrieval failed: {e}")
         # Fallback to SQLite
-        return await self._retrieve_from_sqlite(key)
+        try:
+            entry = self.memory_db.retrieve_entry(key)
+            if entry:
+                self.stats["sqlite_hits"] += 1
+                return entry.data
+            else:
+                self.stats["sqlite_misses"] += 1
+        except Exception as e:
+            logger.error(f"SQLite retrieval failed: {e}")
+        return None
+
+    def get_statistics(self) -> Dict:
+        """Get agent statistics."""
+        return {
+            "redis_available": self.redis_available,
+            "sqlite_path": self.db_path,
+            "stats": self.stats.copy()
+        }
+
+# -- Simple factory for compatibility --
+def create_sync_memory_agent(config: Dict = None) -> HybridMemoryAgent:
+    return HybridMemoryAgent(config)
+
+# For compatibility with old code (optional)
+create_streamlit_memory_agent = create_sync_memory_agent
+
+__all__ = [
+    'HybridMemoryAgent',
+    'MemoryContext',
+    'MemoryBucket',
+    'MemoryPriority',
+    'MemoryStatus',
+    'create_sync_memory_agent',
+    'create_streamlit_memory_agent',
+]

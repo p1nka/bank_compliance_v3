@@ -50,7 +50,7 @@ class ReportingAgent:
         self.langsmith_client = LangSmithClient()
 
     @traceable(name="generate_compliance_report")
-    async def generate_compliance_report(self, state: ReportingState) -> ReportingState:
+    def generate_compliance_report(self, state: ReportingState) -> ReportingState:
         """Generate comprehensive compliance report"""
 
         try:
@@ -78,7 +78,7 @@ class ReportingAgent:
             state.generated_reports.append(report)
 
             # Call MCP tool
-            mcp_result = await self.mcp_client.call_tool("generate_compliance_report", {
+            mcp_result = self.mcp_client.call_tool("generate_compliance_report", {
                 "report": report,
                 "user_id": state.user_id,
                 "session_id": state.session_id
