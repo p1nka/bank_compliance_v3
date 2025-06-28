@@ -4,30 +4,29 @@ Full-featured memory agent with ALL dependencies required.
 Synchronous version, Streamlit-safe.
 """
 
+import hashlib
 import json
 import logging
-import hashlib
-import pickle
-import numpy as np
-from datetime import datetime, timedelta
-from typing import Dict, List, Any, Optional, Union, Tuple
-from dataclasses import dataclass, asdict
-from enum import Enum
-import secrets
 import sqlite3
-from pathlib import Path
-import base64
+from dataclasses import dataclass
+from datetime import datetime
+from enum import Enum
+from typing import Dict, List, Optional
+
+import numpy as np
 
 # Optional: For vector search, comment out if not used or install faiss and sentence_transformers.
 try:
     import faiss
     from sentence_transformers import SentenceTransformer
+
     FAISS_AVAILABLE = True
 except ImportError:
     FAISS_AVAILABLE = False
 
 try:
     import redis
+
     REDIS_AVAILABLE = True
 except ImportError:
     REDIS_AVAILABLE = False
@@ -45,6 +44,7 @@ class MemoryBucket(Enum):
     AUDIT = "audit"
     USER_PROFILE = "user_profile"
 
+
 class MemoryPriority(Enum):
     CRITICAL = "critical"
     HIGH = "high"
@@ -52,12 +52,14 @@ class MemoryPriority(Enum):
     LOW = "low"
     TEMPORARY = "temporary"
 
+
 class MemoryStatus(Enum):
     ACTIVE = "active"
     ARCHIVED = "archived"
     EXPIRED = "expired"
     CORRUPTED = "corrupted"
     PENDING_DELETION = "pending_deletion"
+
 
 @dataclass
 class MemoryContext:
@@ -89,6 +91,7 @@ class MemoryContext:
             self.filter_criteria = {}
         if self.tags is None:
             self.tags = []
+
 
 @dataclass
 class MemoryEntry:
@@ -132,6 +135,7 @@ class MemoryEntry:
             self.tags = []
         if self.related_entries is None:
             self.related_entries = []
+
 
 # -- MemoryDatabase: SQLite Storage --
 
@@ -232,6 +236,7 @@ class MemoryDatabase:
             parent_entry=row[18]
         )
 
+
 # -- RedisManager: Synchronous Redis connection --
 
 class RedisManager:
@@ -272,6 +277,7 @@ class RedisManager:
     def is_available(self):
         return self.available and self.redis_client is not None
 
+
 # -- HybridMemoryAgent: Synchronous version --
 
 class HybridMemoryAgent:
@@ -292,6 +298,9 @@ class HybridMemoryAgent:
             "redis_errors": 0,
         }
         logger.info(f"HybridMemoryAgent initialized. Redis: {self.redis_available}, SQLite: {self.db_path}")
+
+    def create_memory_context(self, *args, **kwargs):
+        return None
 
     def store_memory(self, key: str, data: Dict, ttl: int = 3600) -> bool:
         """Store memory synchronously, Redis preferred, fallback to SQLite."""
@@ -365,9 +374,11 @@ class HybridMemoryAgent:
             "stats": self.stats.copy()
         }
 
-# -- Simple factory for compatibility --
-def create_sync_memory_agent(config: Dict = None) -> HybridMemoryAgent:
-    return HybridMemoryAgent(config)
+    # -- Simple factory for compatibility --
+def create_sync_memory_agent(config: Dict = None) -> "HybridMemoryAgent":
+
+        return HybridMemoryAgent(config)
+
 
 # For compatibility with old code (optional)
 create_streamlit_memory_agent = create_sync_memory_agent

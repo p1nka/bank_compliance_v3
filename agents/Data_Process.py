@@ -4,6 +4,12 @@ FIXED VERSION - Critical issues resolved
 Integrates: Data Upload (4 methods), Quality Analysis, BGE Mapping, and Memory Management
 SYNCHRONOUS VERSION - /await removed for Streamlit compatibility
 """
+"""
+Unified Data Processing Agent for Banking Compliance Analysis
+FIXED VERSION - Critical issues resolved
+Integrates: Data Upload (4 methods), Quality Analysis, BGE Mapping, and Memory Management
+FULLY SYNCHRONOUS VERSION - No coroutine/await calls in any sync code
+"""
 import os
 from pathlib import Path
 import pandas as pd
@@ -20,7 +26,6 @@ import re
 import tempfile
 import requests
 from urllib.parse import urlparse
-
 
 # Configure logging FIRST
 logging.basicConfig(level=logging.INFO)
@@ -109,6 +114,7 @@ except ImportError as e:
         MemoryBucket = DummyMemoryBucket
         MemoryPriority = DummyMemoryPriority
         logger.warning(f"Using dummy memory implementation: {e2}")
+
 
 
 class ProcessingStatus(Enum):
@@ -1296,13 +1302,11 @@ class UnifiedDataProcessingAgent:
 
     # =================== DATA QUALITY ANALYSIS ===================
 
-    def analyze_data_quality(self, data: pd.DataFrame, user_id: str,
-                                  session_id: str, **kwargs) -> QualityResult:
-        """Comprehensive data quality analysis"""
+    def analyze_data_quality(self, data: pd.DataFrame, user_id: str, session_id: str, **kwargs) -> QualityResult:
+        """Comprehensive data quality analysis with robust error handling"""
         start_time = datetime.now()
-
         try:
-            if data.empty:
+            if data is None or data.empty:
                 return QualityResult(success=False, error="Data is empty")
 
             logger.info(f"Analyzing data quality for {len(data)} records, {len(data.columns)} columns")
@@ -1320,15 +1324,15 @@ class UnifiedDataProcessingAgent:
                 except Exception as e:
                     logger.warning(f"Memory context creation failed: {e}")
 
-            # Load quality benchmarks from memory
+            # Load quality benchmarks from memory (optional, may be empty)
             quality_benchmarks = self._load_quality_benchmarks(memory_context)
 
             # Perform quality analysis
-            completeness_score =  self._assess_completeness(data)
-            accuracy_score =  self._assess_accuracy(data)
-            consistency_score = self._assess_consistency(data)
-            validity_score = self._assess_validity(data)
-            uniqueness_score = self._assess_uniqueness(data)
+            completeness_score = self._safe_assess(self._assess_completeness, data)
+            accuracy_score = self._safe_assess(self._assess_accuracy, data)
+            consistency_score = self._safe_assess(self._assess_consistency, data)
+            validity_score = self._safe_assess(self._assess_validity, data)
+            uniqueness_score = self._safe_assess(self._assess_uniqueness, data)
 
             # Calculate overall score
             weights = {
@@ -1338,7 +1342,6 @@ class UnifiedDataProcessingAgent:
                 "validity": 0.20,
                 "uniqueness": 0.10
             }
-
             metrics = {
                 "completeness": completeness_score,
                 "accuracy": accuracy_score,
@@ -1346,8 +1349,9 @@ class UnifiedDataProcessingAgent:
                 "validity": validity_score,
                 "uniqueness": uniqueness_score
             }
-
-            overall_score = sum(metrics[metric] * weights[metric] for metric in weights.keys())
+            overall_score = sum(
+                float(metrics.get(metric, 0.0) or 0.0) * float(weights[metric]) for metric in weights
+            )
 
             # Determine quality level
             if overall_score >= 0.9:
@@ -1360,8 +1364,16 @@ class UnifiedDataProcessingAgent:
                 quality_level = DataQualityLevel.POOR.value
 
             # Calculate additional metrics
-            missing_percentage = (data.isnull().sum().sum() / (len(data) * len(data.columns))) * 100
-            duplicate_records = data.duplicated().sum()
+            try:
+                missing_percentage = (data.isnull().sum().sum() / float(len(data) * len(data.columns))) * 100 if len(
+                    data) > 0 and len(data.columns) > 0 else 0.0
+            except Exception:
+                missing_percentage = 0.0
+
+            try:
+                duplicate_records = int(data.duplicated().sum()) if len(data) > 0 else 0
+            except Exception:
+                duplicate_records = 0
 
             # Generate recommendations
             recommendations = self._generate_quality_recommendations(metrics, data)
@@ -1374,7 +1386,7 @@ class UnifiedDataProcessingAgent:
                 quality_level=quality_level,
                 metrics=metrics,
                 missing_percentage=missing_percentage,
-                duplicate_records=int(duplicate_records),
+                duplicate_records=duplicate_records,
                 recommendations=recommendations,
                 processing_time=processing_time
             )
@@ -1399,6 +1411,13 @@ class UnifiedDataProcessingAgent:
                 error=str(e),
                 processing_time=(datetime.now() - start_time).total_seconds()
             )
+
+    def _safe_assess(self, func, data):
+        try:
+            return float(func(data))
+        except Exception as e:
+            logger.warning(f"{func.__name__} failed: {e}")
+            return 0.0
 
     def _assess_completeness(self, data: pd.DataFrame) -> float:
         """Assess data completeness"""
@@ -1828,7 +1847,7 @@ class UnifiedDataProcessingAgent:
 
     def _store_upload_results(self, result: UploadResult, memory_context, upload_method: str) -> None:
         """Store upload results in memory SAFELY"""
-        if not self.memory_agent or not result.success or not MEMORY_AGENT_AVAILABLE:
+        if not self.memory_agent or not result.success or not MEMORY_AGENT_AVAILABLE or not memory_context:
             return
 
         try:
@@ -1859,7 +1878,7 @@ class UnifiedDataProcessingAgent:
 
     def _store_quality_results(self, result: QualityResult, memory_context, data: pd.DataFrame) -> None:
         """Store quality results in memory SAFELY"""
-        if not self.memory_agent or not result.success or not MEMORY_AGENT_AVAILABLE:
+        if not self.memory_agent or not result.success or not MEMORY_AGENT_AVAILABLE or not memory_context:
             return
 
         try:
@@ -1920,7 +1939,7 @@ class UnifiedDataProcessingAgent:
 
     def _store_mapping_results(self, result: MappingResult, memory_context, data: pd.DataFrame) -> None:
         """Store mapping results in memory SAFELY"""
-        if not self.memory_agent or not result.success or not MEMORY_AGENT_AVAILABLE:
+        if not self.memory_agent or not result.success or not MEMORY_AGENT_AVAILABLE or not memory_context:
             return
 
         try:
