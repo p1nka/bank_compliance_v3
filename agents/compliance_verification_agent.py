@@ -1,1204 +1,1198 @@
-"""
-LLM-Enhanced CBUAE Compliance System with Orchestrator
-=====================================================
-
-Production-ready banking compliance system integrated with Llama 3 8B Instruct
-for intelligent recommendations and orchestrated multi-agent processing.
-
-Features:
-- Llama 3 8B Instruct integration for intelligent analysis
-- Orchestrator pattern for agent coordination
-- LLM-powered recommendation engine
-- Real-time compliance analysis with AI insights
-- Production-grade error handling and monitoring
-"""
-
-import asyncio
-import json
-import logging
-import time
-import uuid
-from datetime import datetime, timedelta
-from typing import Dict, List, Any, Optional, Union, Tuple
-from dataclasses import dataclass, field, asdict
 from enum import Enum
-import pandas as pd
-import numpy as np
-from decimal import Decimal
-import sqlite3
-from contextlib import asynccontextmanager
-import aiohttp
-import warnings
-warnings.filterwarnings('ignore')
+import os
+import csv
+from typing import Dict, List, Optional
+from datetime import datetime, timedelta
+import requests
+from llama_cpp import Llama
 
-# LLM Integration
-try:
-    from transformers import AutoTokenizer, AutoModelForCausalLM
-    import torch
-    LLM_AVAILABLE = True
-except ImportError:
-    LLM_AVAILABLE = False
-    print("Warning: Transformers not available. Install with: pip install transformers torch")
+# Initialize LLM
+llm = Llama(model_path="mistral-7b-instruct-v0.1.Q4_K_M.gguf", n_ctx=2048)
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
 
-# ===== LLM INTEGRATION SERVICE =====
+# Constants and Enums
+class ComplianceStatus(Enum):
+    COMPLIANT = "compliant"
+    NON_COMPLIANT = "non_compliant"
+    PARTIAL_COMPLIANT = "partial_compliant"
+    PENDING_REVIEW = "pending_review"
+    CRITICAL_VIOLATION = "critical_violation"
 
-class LlamaComplianceAnalyzer:
-    """
-    Llama 3 8B Instruct integration for banking compliance analysis
-    """
 
-    def __init__(self, model_name: str = "meta-llama/Meta-Llama-3-8B-Instruct"):
-        self.model_name = model_name
-        self.tokenizer = None
-        self.model = None
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.max_length = 2048
-        self.temperature = 0.1  # Low temperature for consistent compliance analysis
+class ViolationType(Enum):
+    ARTICLE_2_VIOLATION = "article_2_violation"
+    ARTICLE_3_1_VIOLATION = "article_3_1_violation"
+    ARTICLE_3_4_VIOLATION = "article_3_4_violation"
+    CONTACT_VIOLATION = "contact_violation"
+    TRANSFER_VIOLATION = "transfer_violation"
+    DOCUMENTATION_VIOLATION = "documentation_violation"
+    TIMELINE_VIOLATION = "timeline_violation"
+    AMOUNT_VIOLATION = "amount_violation"
+    REPORTING_VIOLATION = "reporting_violation"
 
-        if LLM_AVAILABLE:
-            self._initialize_model()
 
-    def _initialize_model(self):
-        """Initialize Llama 3 8B Instruct model"""
+class Priority(Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+    IMMEDIATE = "immediate"
+
+
+class RiskLevel(Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+class CBUAEArticle(Enum):
+    ARTICLE_2 = "article_2"
+    ARTICLE_3_1 = "article_3_1"
+    ARTICLE_3_4 = "article_3_4"
+    ARTICLE_4 = "article_4"
+    ARTICLE_5 = "article_5"
+
+
+# Base Compliance Agent Class
+class ComplianceAgent:
+    def __init__(self):
+        self.llm = Llama(model_path="mistral-7b-instruct-v0.1.Q4_K_M.gguf", n_ctx=2048)
+
+    def get_llm_recommendation(self, context: str) -> str:
         try:
-            logger.info(f"Loading Llama 3 8B model on {self.device}...")
+            prompt = f"""As a CBUAE banking compliance expert, analyze the following compliance issue and provide specific regulatory recommendations:
 
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                self.model_name,
-                trust_remote_code=True,
-                padding_side="left"
-            )
+Context: {context}
 
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.model_name,
-                torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
-                device_map="auto" if self.device == "cuda" else None,
-                trust_remote_code=True
-            )
+Provide:
+1. Immediate actions required
+2. Regulatory citation
+3. Timeline for remediation
+4. Risk assessment
+5. Preventive measures
 
-            if self.tokenizer.pad_token is None:
-                self.tokenizer.pad_token = self.tokenizer.eos_token
+Response:"""
 
-            logger.info("Llama 3 8B model loaded successfully")
-
+            response = self.llm(prompt, max_tokens=200)
+            return response.get('choices', [{}])[0].get('text', 'No recommendation available').strip()
         except Exception as e:
-            logger.error(f"Failed to load Llama 3 8B model: {e}")
-            self.model = None
-            self.tokenizer = None
+            print(f"Error getting LLM recommendation: {e}")
+            return "Recommendation unavailable due to system error"
 
-    def _create_compliance_prompt(self, context: Dict, analysis_type: str) -> str:
-        """
-        Create specialized prompts for banking compliance analysis
-        """
+    def execute(self, account_data: Dict, dormancy_results: Dict = None) -> Dict:
+        raise NotImplementedError
 
-        base_context = f"""
-You are an expert CBUAE (Central Bank of UAE) banking compliance analyst with deep knowledge of UAE banking regulations, particularly Articles 2, 3, 5, and 8 of the Dormant Accounts Regulation.
 
-Current Analysis Context:
-- Bank: {context.get('bank_name', 'UAE Commercial Bank')}
-- Analysis Type: {analysis_type}
-- Total Accounts: {context.get('total_accounts', 'N/A')}
-- Violations Found: {context.get('violations_found', 'N/A')}
-- Compliance Rate: {context.get('compliance_rate', 'N/A')}%
-
-Regulatory Framework:
-- CBUAE Article 2: Dormancy classification after 3 years (1095 days)
-- CBUAE Article 3: Minimum 3 contact attempts required
-- CBUAE Article 5: Bank responsibilities and timelines
-- CBUAE Article 8: Mandatory Central Bank transfer after 5 years
-
-"""
-
-        if analysis_type == "contact_attempts":
-            return base_context + f"""
-Contact Attempts Analysis Results:
-- Accounts with insufficient attempts: {context.get('insufficient_attempts', 0)}
-- Accounts with zero attempts: {context.get('zero_attempts', 0)}
-- Average attempts per account: {context.get('avg_attempts', 0)}
-- Timeline violations: {context.get('timeline_violations', 0)}
-
-Specific Violations:
-{json.dumps(context.get('sample_violations', []), indent=2)}
-
-Provide 5 specific, actionable recommendations to improve contact attempts compliance with CBUAE Article 3.1. Focus on practical implementation steps that a UAE bank can execute immediately.
-
-Recommendations:"""
-
-        elif analysis_type == "dormancy_classification":
-            return base_context + f"""
-Dormancy Classification Analysis Results:
-- Unflagged dormant candidates: {context.get('unflagged_accounts', 0)}
-- Misclassified accounts: {context.get('misclassified_accounts', 0)}
-- Average dormancy period: {context.get('avg_dormancy_days', 0)} days
-- High-value dormant accounts: {context.get('high_value_accounts', 0)}
-
-Classification Issues:
-{json.dumps(context.get('classification_issues', []), indent=2)}
-
-Provide 5 specific recommendations to improve dormancy classification accuracy per CBUAE Article 2. Include system improvements and process enhancements.
-
-Recommendations:"""
-
-        elif analysis_type == "cbuae_transfers":
-            return base_context + f"""
-CBUAE Transfer Analysis Results:
-- Accounts eligible for transfer: {context.get('transfer_eligible', 0)}
-- Overdue transfers: {context.get('overdue_transfers', 0)}
-- Total transfer amount: AED {context.get('total_transfer_amount', 0):,.2f}
-- Foreign currency conversions needed: {context.get('fx_conversions', 0)}
-
-Transfer Violations:
-{json.dumps(context.get('transfer_violations', []), indent=2)}
-
-Provide 5 critical recommendations for CBUAE transfer compliance per Article 8. Include legal risk mitigation and process automation suggestions.
-
-Recommendations:"""
-
-        elif analysis_type == "risk_assessment":
-            return base_context + f"""
-Overall Risk Assessment:
-- Critical violations: {context.get('critical_violations', 0)}
-- High-risk violations: {context.get('high_violations', 0)}
-- Regulatory risk level: {context.get('risk_level', 'UNKNOWN')}
-- Audit readiness score: {context.get('audit_score', 0)}%
-
-Risk Factors:
-{json.dumps(context.get('risk_factors', []), indent=2)}
-
-As a senior banking compliance expert, provide a comprehensive risk mitigation strategy with 7 specific actions to achieve 100% CBUAE compliance. Include immediate, short-term, and long-term recommendations.
-
-Risk Mitigation Strategy:"""
-
-        else:
-            return base_context + f"""
-General Compliance Analysis:
-{json.dumps(context, indent=2)}
-
-Provide 5 specific recommendations to improve overall CBUAE compliance based on the analysis results.
-
-Recommendations:"""
-
-    async def generate_compliance_recommendations(self, context: Dict, analysis_type: str) -> Dict:
-        """
-        Generate intelligent compliance recommendations using Llama 3 8B
-        """
-        if not self.model or not self.tokenizer:
-            return self._fallback_recommendations(analysis_type)
-
-        try:
-            prompt = self._create_compliance_prompt(context, analysis_type)
-
-            # Tokenize and generate
-            inputs = self.tokenizer(
-                prompt,
-                return_tensors="pt",
-                truncation=True,
-                max_length=self.max_length - 512,  # Reserve space for generation
-                padding=True
-            ).to(self.device)
-
-            with torch.no_grad():
-                outputs = self.model.generate(
-                    **inputs,
-                    max_new_tokens=512,
-                    temperature=self.temperature,
-                    do_sample=True,
-                    pad_token_id=self.tokenizer.eos_token_id,
-                    eos_token_id=self.tokenizer.eos_token_id,
-                    repetition_penalty=1.1
-                )
-
-            # Decode and extract recommendations
-            full_response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-            recommendations_text = full_response[len(prompt):].strip()
-
-            # Parse recommendations
-            recommendations = self._parse_llm_recommendations(recommendations_text)
-
-            return {
-                "success": True,
-                "recommendations": recommendations,
-                "analysis_type": analysis_type,
-                "generated_by": "Llama-3-8B-Instruct",
-                "generation_time": time.time(),
-                "model_confidence": self._calculate_confidence_score(recommendations_text)
-            }
-
-        except Exception as e:
-            logger.error(f"LLM recommendation generation failed: {e}")
-            return self._fallback_recommendations(analysis_type)
-
-    def _parse_llm_recommendations(self, text: str) -> List[Dict]:
-        """Parse LLM output into structured recommendations"""
-        recommendations = []
-        lines = text.split('\n')
-
-        current_rec = None
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-
-            # Look for numbered recommendations
-            if any(line.startswith(f"{i}.") for i in range(1, 10)):
-                if current_rec:
-                    recommendations.append(current_rec)
-
-                current_rec = {
-                    "recommendation": line,
-                    "priority": self._extract_priority(line),
-                    "category": self._categorize_recommendation(line),
-                    "implementation_timeframe": self._extract_timeframe(line)
-                }
-            elif current_rec and line:
-                # Continue previous recommendation
-                current_rec["recommendation"] += " " + line
-
-        if current_rec:
-            recommendations.append(current_rec)
-
-        return recommendations[:7]  # Limit to 7 recommendations
-
-    def _extract_priority(self, text: str) -> str:
-        """Extract priority from recommendation text"""
-        text_lower = text.lower()
-        if any(word in text_lower for word in ['immediate', 'urgent', 'critical', 'asap']):
-            return "CRITICAL"
-        elif any(word in text_lower for word in ['high', 'important', 'priority']):
-            return "HIGH"
-        elif any(word in text_lower for word in ['medium', 'moderate']):
-            return "MEDIUM"
-        else:
-            return "LOW"
-
-    def _categorize_recommendation(self, text: str) -> str:
-        """Categorize recommendation by type"""
-        text_lower = text.lower()
-        if any(word in text_lower for word in ['system', 'automat', 'technology']):
-            return "TECHNOLOGY"
-        elif any(word in text_lower for word in ['process', 'procedure', 'workflow']):
-            return "PROCESS"
-        elif any(word in text_lower for word in ['training', 'staff', 'team']):
-            return "TRAINING"
-        elif any(word in text_lower for word in ['monitor', 'report', 'track']):
-            return "MONITORING"
-        else:
-            return "GENERAL"
-
-    def _extract_timeframe(self, text: str) -> str:
-        """Extract implementation timeframe"""
-        text_lower = text.lower()
-        if any(word in text_lower for word in ['immediate', 'asap', 'urgent']):
-            return "IMMEDIATE"
-        elif any(word in text_lower for word in ['week', '7 day', 'short']):
-            return "1-2_WEEKS"
-        elif any(word in text_lower for word in ['month', '30 day']):
-            return "1_MONTH"
-        elif any(word in text_lower for word in ['quarter', '90 day']):
-            return "3_MONTHS"
-        else:
-            return "ONGOING"
-
-    def _calculate_confidence_score(self, text: str) -> float:
-        """Calculate confidence score based on response quality"""
-        if not text:
-            return 0.0
-
-        # Quality indicators
-        has_numbers = any(char.isdigit() for char in text)
-        has_specific_terms = any(term in text.lower() for term in [
-            'cbuae', 'article', 'compliance', 'dormant', 'regulation'
-        ])
-        adequate_length = len(text) > 100
-        well_structured = text.count('.') > 3
-
-        score = 0.0
-        if has_numbers: score += 0.2
-        if has_specific_terms: score += 0.3
-        if adequate_length: score += 0.3
-        if well_structured: score += 0.2
-
-        return min(score, 1.0)
-
-    def _fallback_recommendations(self, analysis_type: str) -> Dict:
-        """Fallback recommendations when LLM is not available"""
-        fallback_recs = {
-            "contact_attempts": [
-                {"recommendation": "Implement automated contact attempt tracking system", "priority": "HIGH", "category": "TECHNOLOGY"},
-                {"recommendation": "Establish multi-channel communication protocols", "priority": "HIGH", "category": "PROCESS"},
-                {"recommendation": "Train staff on CBUAE Article 3.1 requirements", "priority": "MEDIUM", "category": "TRAINING"},
-                {"recommendation": "Set up real-time compliance monitoring dashboard", "priority": "MEDIUM", "category": "MONITORING"},
-                {"recommendation": "Review and update customer contact information", "priority": "LOW", "category": "PROCESS"}
-            ],
-            "dormancy_classification": [
-                {"recommendation": "Automate dormancy flagging based on 3-year threshold", "priority": "CRITICAL", "category": "TECHNOLOGY"},
-                {"recommendation": "Implement daily dormancy status review process", "priority": "HIGH", "category": "PROCESS"},
-                {"recommendation": "Create dormancy classification audit trail", "priority": "HIGH", "category": "MONITORING"},
-                {"recommendation": "Establish account status reconciliation procedures", "priority": "MEDIUM", "category": "PROCESS"},
-                {"recommendation": "Deploy real-time dormancy alerts", "priority": "MEDIUM", "category": "TECHNOLOGY"}
-            ]
+# Agent 1: Article 2 Compliance - Dormant Account Detection
+class Article2ComplianceAgent(ComplianceAgent):
+    def execute(self, account_data: Dict, dormancy_results: Dict = None) -> Dict:
+        result = {
+            'agent': 'Article2Compliance',
+            'compliance_status': ComplianceStatus.COMPLIANT.value,
+            'violations': [],
+            'action': None,
+            'priority': Priority.LOW.value,
+            'risk_level': RiskLevel.LOW.value,
+            'recommendation': None,
+            'regulatory_citation': 'CBUAE Article 2 - Dormant Account Identification'
         }
 
-        return {
-            "success": False,
-            "recommendations": fallback_recs.get(analysis_type, []),
-            "analysis_type": analysis_type,
-            "generated_by": "FALLBACK_SYSTEM",
-            "note": "LLM not available, using predefined recommendations"
-        }
-
-# ===== ORCHESTRATOR PATTERN IMPLEMENTATION =====
-
-@dataclass
-class AgentTask:
-    """Task definition for agent execution"""
-    agent_id: str
-    agent_name: str
-    priority: int
-    dependencies: List[str] = field(default_factory=list)
-    input_data: Optional[Dict] = None
-    timeout_seconds: int = 300
-    retry_count: int = 3
-    llm_analysis_required: bool = False
-
-@dataclass
-class AgentResult:
-    """Result from agent execution"""
-    agent_id: str
-    success: bool
-    result_data: Dict = field(default_factory=dict)
-    execution_time: float = 0.0
-    error_message: Optional[str] = None
-    llm_recommendations: Optional[Dict] = None
-
-class ComplianceOrchestrator:
-    """
-    Advanced orchestrator for coordinating multiple compliance agents
-    with LLM-enhanced analysis and intelligent workflow management
-    """
-
-    def __init__(self, llm_analyzer: LlamaComplianceAnalyzer):
-        self.llm_analyzer = llm_analyzer
-        self.agents = {}
-        self.task_queue = asyncio.Queue()
-        self.completed_tasks = {}
-        self.failed_tasks = {}
-        self.session_id = str(uuid.uuid4())
-        self.execution_context = {}
-
-        # Performance monitoring
-        self.start_time = None
-        self.total_processing_time = 0
-        self.agent_performance = {}
-
-        logger.info(f"Compliance Orchestrator initialized - Session: {self.session_id}")
-
-    def register_agent(self, agent_id: str, agent_instance):
-        """Register a compliance agent with the orchestrator"""
-        self.agents[agent_id] = agent_instance
-        logger.info(f"Agent registered: {agent_id}")
-
-    async def execute_compliance_workflow(self, accounts_df: pd.DataFrame,
-                                        workflow_config: Dict = None) -> Dict:
-        """
-        Execute comprehensive compliance workflow with LLM enhancement
-        """
-        self.start_time = datetime.now()
-        workflow_config = workflow_config or self._get_default_workflow_config()
-
-        try:
-            logger.info(f"Starting compliance workflow with {len(accounts_df)} accounts")
-
-            # Phase 1: Create and queue tasks
-            tasks = self._create_workflow_tasks(accounts_df, workflow_config)
-            await self._queue_tasks(tasks)
-
-            # Phase 2: Execute tasks with dependency management
-            execution_results = await self._execute_task_workflow()
-
-            # Phase 3: LLM-enhanced analysis and recommendations
-            llm_insights = await self._generate_llm_insights(execution_results, accounts_df)
-
-            # Phase 4: Consolidate results
-            final_result = await self._consolidate_workflow_results(
-                execution_results, llm_insights, accounts_df
-            )
-
-            self.total_processing_time = (datetime.now() - self.start_time).total_seconds()
-
-            logger.info(f"Compliance workflow completed in {self.total_processing_time:.2f} seconds")
-            return final_result
-
-        except Exception as e:
-            logger.error(f"Workflow execution failed: {e}")
-            return self._create_error_result(str(e))
-
-    def _get_default_workflow_config(self) -> Dict:
-        """Get default workflow configuration"""
-        return {
-            "enable_llm_analysis": True,
-            "parallel_execution": True,
-            "max_concurrent_agents": 3,
-            "enable_performance_monitoring": True,
-            "generate_recommendations": True,
-            "create_audit_trail": True,
-            "risk_assessment_enabled": True
-        }
-
-    def _create_workflow_tasks(self, accounts_df: pd.DataFrame, config: Dict) -> List[AgentTask]:
-        """Create workflow tasks based on available agents and configuration"""
-        tasks = []
-
-        # Tier 1: Critical compliance agents (highest priority)
-        if "contact_attempts_agent" in self.agents:
-            tasks.append(AgentTask(
-                agent_id="contact_attempts_agent",
-                agent_name="Contact Attempts Compliance",
-                priority=1,
-                input_data={"accounts_df": accounts_df},
-                llm_analysis_required=config.get("enable_llm_analysis", True),
-                timeout_seconds=600
-            ))
-
-        if "dormancy_classification_agent" in self.agents:
-            tasks.append(AgentTask(
-                agent_id="dormancy_classification_agent",
-                agent_name="Dormancy Classification Compliance",
-                priority=1,
-                input_data={"accounts_df": accounts_df},
-                llm_analysis_required=config.get("enable_llm_analysis", True),
-                timeout_seconds=600
-            ))
-
-        # Tier 2: High priority agents (dependent on Tier 1)
-        if "cbuae_transfer_agent" in self.agents:
-            tasks.append(AgentTask(
-                agent_id="cbuae_transfer_agent",
-                agent_name="CBUAE Transfer Compliance",
-                priority=2,
-                dependencies=["dormancy_classification_agent"],
-                input_data={"accounts_df": accounts_df},
-                llm_analysis_required=config.get("enable_llm_analysis", True),
-                timeout_seconds=900
-            ))
-
-        if "internal_ledger_agent" in self.agents:
-            tasks.append(AgentTask(
-                agent_id="internal_ledger_agent",
-                agent_name="Internal Ledger Compliance",
-                priority=2,
-                dependencies=["contact_attempts_agent"],
-                input_data={"accounts_df": accounts_df},
-                llm_analysis_required=config.get("enable_llm_analysis", True),
-                timeout_seconds=600
-            ))
-
-        # Tier 3: Supporting agents
-        if "documentation_agent" in self.agents:
-            tasks.append(AgentTask(
-                agent_id="documentation_agent",
-                agent_name="Documentation Compliance",
-                priority=3,
-                dependencies=["contact_attempts_agent", "dormancy_classification_agent"],
-                input_data={"accounts_df": accounts_df},
-                llm_analysis_required=False,
-                timeout_seconds=300
-            ))
-
-        if "audit_trail_agent" in self.agents:
-            tasks.append(AgentTask(
-                agent_id="audit_trail_agent",
-                agent_name="Audit Trail Generation",
-                priority=4,
-                dependencies=["contact_attempts_agent", "dormancy_classification_agent", "cbuae_transfer_agent"],
-                input_data={"accounts_df": accounts_df},
-                llm_analysis_required=False,
-                timeout_seconds=300
-            ))
-
-        return sorted(tasks, key=lambda x: x.priority)
-
-    async def _queue_tasks(self, tasks: List[AgentTask]):
-        """Queue tasks for execution"""
-        for task in tasks:
-            await self.task_queue.put(task)
-        logger.info(f"Queued {len(tasks)} tasks for execution")
-
-    async def _execute_task_workflow(self) -> Dict[str, AgentResult]:
-        """Execute tasks with dependency management and parallel processing"""
-        results = {}
-        executing_tasks = {}
-
-        while not self.task_queue.empty() or executing_tasks:
-            # Start new tasks that have dependencies satisfied
-            while not self.task_queue.empty():
-                try:
-                    task = self.task_queue.get_nowait()
-
-                    # Check if dependencies are satisfied
-                    if self._dependencies_satisfied(task, results):
-                        # Start task execution
-                        executing_tasks[task.agent_id] = asyncio.create_task(
-                            self._execute_single_agent(task)
-                        )
-                        logger.info(f"Started execution: {task.agent_name}")
-                    else:
-                        # Put back in queue
-                        await self.task_queue.put(task)
-                        break
-
-                except asyncio.QueueEmpty:
-                    break
-
-            # Wait for at least one task to complete
-            if executing_tasks:
-                done, pending = await asyncio.wait(
-                    executing_tasks.values(),
-                    return_when=asyncio.FIRST_COMPLETED,
-                    timeout=1.0
-                )
-
-                # Process completed tasks
-                for task_future in done:
-                    result = await task_future
-                    results[result.agent_id] = result
-
-                    # Remove from executing tasks
-                    for agent_id, future in list(executing_tasks.items()):
-                        if future == task_future:
-                            del executing_tasks[agent_id]
-                            break
-
-                    if result.success:
-                        logger.info(f"Completed successfully: {result.agent_id}")
-                    else:
-                        logger.error(f"Failed: {result.agent_id} - {result.error_message}")
-
-        return results
-
-    def _dependencies_satisfied(self, task: AgentTask, results: Dict[str, AgentResult]) -> bool:
-        """Check if task dependencies are satisfied"""
-        for dep_id in task.dependencies:
-            if dep_id not in results or not results[dep_id].success:
-                return False
-        return True
-
-    async def _execute_single_agent(self, task: AgentTask) -> AgentResult:
-        """Execute a single compliance agent with comprehensive error handling"""
-        start_time = time.time()
-
-        try:
-            if task.agent_id not in self.agents:
-                raise ValueError(f"Agent {task.agent_id} not registered")
-
-            agent = self.agents[task.agent_id]
-
-            # Prepare agent input with dependency results
-            agent_input = task.input_data.copy()
-            agent_input["session_id"] = self.session_id
-            agent_input["orchestrator_context"] = self.execution_context
-
-            # Add dependency results
-            for dep_id in task.dependencies:
-                if dep_id in self.completed_tasks:
-                    agent_input[f"{dep_id}_result"] = self.completed_tasks[dep_id].result_data
-
-            # Execute agent with timeout
-            result_data = await asyncio.wait_for(
-                self._run_agent_analysis(agent, agent_input),
-                timeout=task.timeout_seconds
-            )
-
-            execution_time = time.time() - start_time
-
-            # Generate LLM recommendations if required
-            llm_recommendations = None
-            if task.llm_analysis_required:
-                llm_recommendations = await self._generate_agent_llm_analysis(
-                    task.agent_id, result_data
-                )
-
-            result = AgentResult(
-                agent_id=task.agent_id,
-                success=True,
-                result_data=result_data,
-                execution_time=execution_time,
-                llm_recommendations=llm_recommendations
-            )
-
-            self.completed_tasks[task.agent_id] = result
-            return result
-
-        except asyncio.TimeoutError:
-            error_msg = f"Agent {task.agent_id} timed out after {task.timeout_seconds} seconds"
-            logger.error(error_msg)
-            return AgentResult(
-                agent_id=task.agent_id,
-                success=False,
-                error_message=error_msg,
-                execution_time=time.time() - start_time
-            )
-
-        except Exception as e:
-            error_msg = f"Agent {task.agent_id} execution failed: {str(e)}"
-            logger.error(error_msg)
-            return AgentResult(
-                agent_id=task.agent_id,
-                success=False,
-                error_message=error_msg,
-                execution_time=time.time() - start_time
-            )
-
-    async def _run_agent_analysis(self, agent, input_data: Dict) -> Dict:
-        """Run agent analysis with proper async handling"""
-        if hasattr(agent, 'analyze_compliance'):
-            # Check if agent method is async
-            if asyncio.iscoroutinefunction(agent.analyze_compliance):
-                return await agent.analyze_compliance(**input_data)
-            else:
-                # Run sync method in thread pool
-                loop = asyncio.get_event_loop()
-                return await loop.run_in_executor(
-                    None,
-                    lambda: agent.analyze_compliance(**input_data)
-                )
-        else:
-            raise AttributeError(f"Agent does not have analyze_compliance method")
-
-    async def _generate_agent_llm_analysis(self, agent_id: str, result_data: Dict) -> Optional[Dict]:
-        """Generate LLM analysis for specific agent results"""
-        try:
-            # Map agent ID to analysis type
-            analysis_type_map = {
-                "contact_attempts_agent": "contact_attempts",
-                "dormancy_classification_agent": "dormancy_classification",
-                "cbuae_transfer_agent": "cbuae_transfers",
-                "internal_ledger_agent": "process_optimization"
-            }
-
-            analysis_type = analysis_type_map.get(agent_id, "general")
-
-            # Prepare context for LLM
-            llm_context = {
-                "agent_id": agent_id,
-                "total_accounts": result_data.get("accounts_processed", 0),
-                "violations_found": result_data.get("violations_found", 0),
-                "compliance_rate": result_data.get("compliance_rate_percentage", 100),
-                "processing_time": result_data.get("processing_time", 0),
-                "sample_violations": result_data.get("violations", [])[:3]  # Sample for context
-            }
-
-            # Generate recommendations
-            recommendations = await self.llm_analyzer.generate_compliance_recommendations(
-                llm_context, analysis_type
-            )
-
-            return recommendations
-
-        except Exception as e:
-            logger.error(f"LLM analysis failed for {agent_id}: {e}")
-            return None
-
-    async def _generate_llm_insights(self, execution_results: Dict[str, AgentResult],
-                                   accounts_df: pd.DataFrame) -> Dict:
-        """Generate comprehensive LLM insights across all agent results"""
-        try:
-            # Aggregate results for comprehensive analysis
-            total_violations = sum([
-                result.result_data.get("violations_found", 0)
-                for result in execution_results.values() if result.success
-            ])
-
-            total_accounts = len(accounts_df)
-            overall_compliance_rate = ((total_accounts - total_violations) / total_accounts * 100) if total_accounts > 0 else 100
-
-            # Calculate risk factors
-            critical_violations = sum([
-                len([v for v in result.result_data.get("violations", [])
-                    if v.get("risk_level") == "CRITICAL"])
-                for result in execution_results.values() if result.success
-            ])
-
-            # Prepare comprehensive context
-            comprehensive_context = {
-                "bank_name": "UAE Commercial Bank",
-                "total_accounts": total_accounts,
-                "total_violations": total_violations,
-                "overall_compliance_rate": round(overall_compliance_rate, 2),
-                "critical_violations": critical_violations,
-                "high_violations": total_violations - critical_violations,
-                "agents_executed": len([r for r in execution_results.values() if r.success]),
-                "agents_failed": len([r for r in execution_results.values() if not r.success]),
-                "risk_level": self._calculate_overall_risk_level(total_violations, total_accounts),
-                "audit_score": min(overall_compliance_rate, 100),
-                "risk_factors": self._extract_risk_factors(execution_results)
-            }
-
-            # Generate comprehensive risk assessment
-            risk_insights = await self.llm_analyzer.generate_compliance_recommendations(
-                comprehensive_context, "risk_assessment"
-            )
-
-            return {
-                "comprehensive_analysis": risk_insights,
-                "context": comprehensive_context,
-                "individual_agent_insights": {
-                    agent_id: result.llm_recommendations
-                    for agent_id, result in execution_results.items()
-                    if result.llm_recommendations
-                }
-            }
-
-        except Exception as e:
-            logger.error(f"LLM insights generation failed: {e}")
-            return {"error": str(e)}
-
-    def _calculate_overall_risk_level(self, violations: int, total_accounts: int) -> str:
-        """Calculate overall regulatory risk level"""
-        if violations == 0:
-            return "LOW"
-
-        violation_rate = violations / total_accounts if total_accounts > 0 else 0
-
-        if violation_rate > 0.1:  # >10% violation rate
-            return "CRITICAL"
-        elif violation_rate > 0.05:  # >5% violation rate
-            return "HIGH"
-        elif violation_rate > 0.02:  # >2% violation rate
-            return "MEDIUM"
-        else:
-            return "LOW"
-
-    def _extract_risk_factors(self, execution_results: Dict[str, AgentResult]) -> List[str]:
-        """Extract key risk factors from agent results"""
-        risk_factors = []
-
-        for agent_id, result in execution_results.items():
-            if not result.success:
-                risk_factors.append(f"Agent {agent_id} execution failed")
-                continue
-
-            violations = result.result_data.get("violations_found", 0)
-            if violations > 0:
-                risk_factors.append(f"{agent_id}: {violations} violations found")
-
-            # Check for specific high-risk conditions
-            if agent_id == "cbuae_transfer_agent":
-                overdue_transfers = len([
-                    v for v in result.result_data.get("violations", [])
-                    if "overdue" in v.get("violation_type", "").lower()
-                ])
-                if overdue_transfers > 0:
-                    risk_factors.append(f"CRITICAL: {overdue_transfers} overdue CBUAE transfers")
-
-        return risk_factors
-
-    async def _consolidate_workflow_results(self, execution_results: Dict[str, AgentResult],
-                                          llm_insights: Dict, accounts_df: pd.DataFrame) -> Dict:
-        """Consolidate all workflow results into comprehensive output"""
-
-        successful_agents = [r for r in execution_results.values() if r.success]
-        failed_agents = [r for r in execution_results.values() if not r.success]
-
-        # Aggregate metrics
-        total_violations = sum([r.result_data.get("violations_found", 0) for r in successful_agents])
-        total_actions = sum([r.result_data.get("actions_generated", 0) for r in successful_agents])
-        avg_processing_time = np.mean([r.execution_time for r in successful_agents]) if successful_agents else 0
-
-        # Create comprehensive result
-        consolidated_result = {
-            # Execution metadata
-            "orchestration_session_id": self.session_id,
-            "execution_timestamp": datetime.now().isoformat(),
-            "total_processing_time": self.total_processing_time,
-
-            # Agent execution summary
-            "agents_summary": {
-                "total_agents": len(execution_results),
-                "successful_agents": len(successful_agents),
-                "failed_agents": len(failed_agents),
-                "average_execution_time": round(avg_processing_time, 2)
-            },
-
-            # Compliance metrics
-            "compliance_metrics": {
-                "total_accounts_analyzed": len(accounts_df),
-                "total_violations_found": total_violations,
-                "total_actions_generated": total_actions,
-                "overall_compliance_rate": round(((len(accounts_df) - total_violations) / len(accounts_df) * 100), 2) if len(accounts_df) > 0 else 100,
-                "regulatory_risk_level": llm_insights.get("context", {}).get("risk_level", "UNKNOWN")
-            },
-
-            # Detailed agent results
-            "agent_results": {
-                agent_id: {
-                    "success": result.success,
-                    "execution_time": result.execution_time,
-                    "violations_found": result.result_data.get("violations_found", 0),
-                    "actions_generated": result.result_data.get("actions_generated", 0),
-                    "compliance_rate": result.result_data.get("compliance_rate_percentage", 100),
-                    "error_message": result.error_message,
-                    "llm_recommendations": result.llm_recommendations
-                }
-                for agent_id, result in execution_results.items()
-            },
-
-            # LLM-generated insights
-            "llm_insights": llm_insights,
-
-            # Consolidated recommendations
-            "priority_recommendations": self._extract_priority_recommendations(execution_results, llm_insights),
-
-            # Audit and compliance information
-            "audit_information": {
-                "workflow_traceable": True,
-                "cbuae_examination_ready": len(failed_agents) == 0,
-                "regulatory_compliance_verified": total_violations == 0,
-                "documentation_complete": True
-            },
-
-            # Performance metrics
-            "performance_metrics": {
-                "accounts_per_second": round(len(accounts_df) / self.total_processing_time, 2) if self.total_processing_time > 0 else 0,
-                "violations_per_second": round(total_violations / self.total_processing_time, 2) if self.total_processing_time > 0 else 0,
-                "memory_efficiency": "OPTIMIZED",
-                "processing_status": "COMPLETED"
-            }
-        }
-
-        return consolidated_result
-
-    def _extract_priority_recommendations(self, execution_results: Dict[str, AgentResult],
-                                        llm_insights: Dict) -> List[Dict]:
-        """Extract and prioritize recommendations across all agents"""
-        all_recommendations = []
-
-        # Extract from individual agent LLM recommendations
-        for agent_id, result in execution_results.items():
-            if result.llm_recommendations and result.llm_recommendations.get("success"):
-                for rec in result.llm_recommendations.get("recommendations", []):
-                    rec["source_agent"] = agent_id
-                    all_recommendations.append(rec)
-
-        # Extract from comprehensive LLM analysis
-        comprehensive_recs = llm_insights.get("comprehensive_analysis", {}).get("recommendations", [])
-        for rec in comprehensive_recs:
-            rec["source_agent"] = "comprehensive_analysis"
-            all_recommendations.append(rec)
-
-        # Sort by priority and return top recommendations
-        priority_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
-        sorted_recs = sorted(
-            all_recommendations,
-            key=lambda x: (priority_order.get(x.get("priority", "LOW"), 3), x.get("recommendation", ""))
-        )
-
-        return sorted_recs[:10]  # Top 10 recommendations
-
-    def _create_error_result(self, error_message: str) -> Dict:
-        """Create error result for failed workflow execution"""
-        return {
-            "orchestration_session_id": self.session_id,
-            "execution_timestamp": datetime.now().isoformat(),
-            "success": False,
-            "error_message": error_message,
-            "agents_summary": {"total_agents": 0, "successful_agents": 0, "failed_agents": 0},
-            "compliance_metrics": {"total_violations_found": 0, "regulatory_risk_level": "ERROR"},
-            "llm_insights": {"error": "Workflow execution failed"}
-        }
-
-# ===== LLM-ENHANCED COMPLIANCE AGENTS =====
-
-class LLMEnhancedContactAttemptsAgent:
-    """
-    Contact Attempts Compliance Agent with LLM-powered analysis
-    """
-
-    def __init__(self, llm_analyzer: LlamaComplianceAnalyzer = None):
-        self.agent_id = "contact_attempts_agent"
-        self.agent_name = "LLM-Enhanced Contact Attempts Compliance"
-        self.llm_analyzer = llm_analyzer
-        self.minimum_attempts = 3
-
-    async def analyze_compliance(self, accounts_df: pd.DataFrame, **kwargs) -> Dict:
-        """
-        Comprehensive contact attempts analysis with LLM enhancement
-        """
-        start_time = datetime.now()
-        violations = []
-
-        try:
-            # Filter dormant accounts
-            dormant_accounts = accounts_df[
-                accounts_df['dormancy_status'].isin(['DORMANT', 'Dormant', 'dormant'])
-            ].copy()
-
-            if dormant_accounts.empty:
-                return self._create_empty_result("No dormant accounts found")
-
-            # Analyze each account
-            for idx, account in dormant_accounts.iterrows():
-                violation = self._analyze_single_account(account)
-                if violation:
-                    violations.append(violation)
-
-            # Calculate metrics
-            processing_time = (datetime.now() - start_time).total_seconds()
-            compliance_rate = ((len(dormant_accounts) - len(violations)) / len(dormant_accounts) * 100) if len(dormant_accounts) > 0 else 100
-
-            # Prepare result
-            result = {
-                "agent_id": self.agent_id,
-                "agent_name": self.agent_name,
-                "accounts_processed": len(dormant_accounts),
-                "violations_found": len(violations),
-                "actions_generated": len(violations) * 2,  # Avg 2 actions per violation
-                "processing_time": processing_time,
-                "compliance_rate_percentage": round(compliance_rate, 2),
-                "violations": violations,
-                "cbuae_article": "CBUAE-DA-Art.3.1",
-                "regulatory_compliance": "VERIFIED",
-
-                # Additional context for LLM
-                "insufficient_attempts": len([v for v in violations if v.get("contact_attempts_made", 0) < self.minimum_attempts]),
-                "zero_attempts": len([v for v in violations if v.get("contact_attempts_made", 0) == 0]),
-                "avg_attempts": np.mean([v.get("contact_attempts_made", 0) for v in violations]) if violations else self.minimum_attempts,
-                "timeline_violations": len([v for v in violations if not v.get("contact_initiated_timely", True)])
-            }
-
-            return result
-
-        except Exception as e:
-            logger.error(f"Contact attempts analysis failed: {e}")
-            return {"error": str(e), "success": False}
-
-    def _analyze_single_account(self, account: pd.Series) -> Optional[Dict]:
-        """Analyze single account for contact compliance"""
-        account_id = account.get('account_id', 'UNKNOWN')
-        attempts_made = int(account.get('contact_attempts_made', 0))
-        last_contact_date = account.get('last_contact_date')
-
-        # Check compliance
-        is_compliant = (
-            attempts_made >= self.minimum_attempts and
-            pd.notna(last_contact_date) and
-            last_contact_date != ''
-        )
-
-        if is_compliant:
-            return None
-
-        # Create violation record
-        violation = {
-            "account_id": account_id,
-            "customer_id": account.get('customer_id', ''),
-            "contact_attempts_made": attempts_made,
-            "required_attempts": self.minimum_attempts,
-            "last_contact_date": str(last_contact_date) if pd.notna(last_contact_date) else "Never",
-            "violation_type": "INSUFFICIENT_CONTACT_ATTEMPTS",
-            "risk_level": "CRITICAL" if attempts_made == 0 else "HIGH",
-            "contact_initiated_timely": True,  # Simplified for example
-            "balance_current": float(account.get('balance_current', 0)),
-            "account_type": account.get('account_type', 'UNKNOWN'),
-            "regulatory_requirement": "CBUAE Art. 3.1 - Minimum 3 contact attempts"
-        }
-
-        return violation
-
-    def _create_empty_result(self, reason: str) -> Dict:
-        """Create empty result"""
-        return {
-            "agent_id": self.agent_id,
-            "agent_name": self.agent_name,
-            "accounts_processed": 0,
-            "violations_found": 0,
-            "actions_generated": 0,
-            "compliance_rate_percentage": 100.0,
-            "violations": [],
-            "reason": reason
-        }
-
-class LLMEnhancedDormancyClassificationAgent:
-    """
-    Dormancy Classification Agent with LLM-powered insights
-    """
-
-    def __init__(self, llm_analyzer: LlamaComplianceAnalyzer = None):
-        self.agent_id = "dormancy_classification_agent"
-        self.agent_name = "LLM-Enhanced Dormancy Classification"
-        self.llm_analyzer = llm_analyzer
-        self.dormancy_threshold_days = 1095  # 3 years per CBUAE Article 2
-
-    async def analyze_compliance(self, accounts_df: pd.DataFrame, **kwargs) -> Dict:
-        """
-        Dormancy classification analysis with LLM enhancement
-        """
-        start_time = datetime.now()
-        violations = []
-
-        try:
-            # Analyze all accounts for dormancy classification
-            for idx, account in accounts_df.iterrows():
-                violation = self._analyze_dormancy_classification(account)
-                if violation:
-                    violations.append(violation)
-
-            # Calculate metrics
-            processing_time = (datetime.now() - start_time).total_seconds()
-            compliance_rate = ((len(accounts_df) - len(violations)) / len(accounts_df) * 100) if len(accounts_df) > 0 else 100
-
-            result = {
-                "agent_id": self.agent_id,
-                "agent_name": self.agent_name,
-                "accounts_processed": len(accounts_df),
-                "violations_found": len(violations),
-                "actions_generated": len(violations),
-                "processing_time": processing_time,
-                "compliance_rate_percentage": round(compliance_rate, 2),
-                "violations": violations,
-                "cbuae_article": "CBUAE-DA-Art.2.1",
-
-                # LLM context
-                "unflagged_accounts": len([v for v in violations if "unflagged" in v.get("violation_type", "").lower()]),
-                "misclassified_accounts": len(violations),
-                "avg_dormancy_days": np.mean([v.get("days_inactive", 0) for v in violations]) if violations else 0,
-                "high_value_accounts": len([v for v in violations if v.get("balance_current", 0) >= 50000])
-            }
-
-            return result
-
-        except Exception as e:
-            logger.error(f"Dormancy classification analysis failed: {e}")
-            return {"error": str(e), "success": False}
-
-    def _analyze_dormancy_classification(self, account: pd.Series) -> Optional[Dict]:
-        """Analyze account dormancy classification"""
-        try:
-            last_transaction = pd.to_datetime(account['last_transaction_date'])
-            days_inactive = (datetime.now() - last_transaction).days
-            current_status = account.get('dormancy_status', 'UNKNOWN')
-
-            # Check if should be dormant but isn't flagged
-            should_be_dormant = days_inactive >= self.dormancy_threshold_days
-            is_marked_dormant = current_status in ['DORMANT', 'Dormant', 'dormant']
-
-            if should_be_dormant and not is_marked_dormant:
-                return {
-                    "account_id": account.get('account_id', 'UNKNOWN'),
-                    "customer_id": account.get('customer_id', ''),
-                    "days_inactive": days_inactive,
-                    "current_status": current_status,
-                    "required_status": "DORMANT",
-                    "violation_type": "UNFLAGGED_DORMANT_ACCOUNT",
-                    "risk_level": "HIGH",
-                    "balance_current": float(account.get('balance_current', 0)),
-                    "account_type": account.get('account_type', 'UNKNOWN'),
-                    "regulatory_requirement": "CBUAE Art. 2.1 - 3 year dormancy threshold"
-                }
-
-            return None
-
-        except Exception as e:
-            logger.warning(f"Error analyzing account dormancy: {e}")
-            return None
-
-# ===== PRODUCTION USAGE EXAMPLE =====
-
-async def main():
-    """
-    Production example of LLM-enhanced compliance orchestration
-    """
-    try:
-        # Initialize LLM analyzer
-        logger.info("Initializing Llama 3 8B Compliance Analyzer...")
-        llm_analyzer = LlamaComplianceAnalyzer()
-
-        # Initialize orchestrator
-        orchestrator = ComplianceOrchestrator(llm_analyzer)
-
-        # Register compliance agents
-        contact_agent = LLMEnhancedContactAttemptsAgent(llm_analyzer)
-        dormancy_agent = LLMEnhancedDormancyClassificationAgent(llm_analyzer)
-
-        orchestrator.register_agent("contact_attempts_agent", contact_agent)
-        orchestrator.register_agent("dormancy_classification_agent", dormancy_agent)
-
-        # Sample banking data
-        sample_data = pd.DataFrame({
-            'account_id': [f'ACC{i:06d}' for i in range(1, 1001)],
-            'customer_id': [f'CUST{i:06d}' for i in range(1, 1001)],
-            'account_type': np.random.choice(['SAVINGS', 'CURRENT', 'FIXED_DEPOSIT'], 1000),
-            'account_status': ['ACTIVE'] * 1000,
-            'dormancy_status': np.random.choice(['DORMANT', 'ACTIVE'], 1000, p=[0.15, 0.85]),
-            'balance_current': np.random.uniform(1000, 100000, 1000),
-            'currency': np.random.choice(['AED', 'USD', 'EUR'], 1000, p=[0.7, 0.2, 0.1]),
-            'last_transaction_date': pd.date_range(
-                start='2020-01-01',
-                end='2024-01-01',
-                periods=1000
-            ).strftime('%Y-%m-%d'),
-            'contact_attempts_made': np.random.randint(0, 5, 1000),
-            'last_contact_date': pd.date_range(
-                start='2023-01-01',
-                end='2024-01-01',
-                periods=1000
-            ).strftime('%Y-%m-%d')
-        })
-
-        logger.info(f"Starting compliance analysis for {len(sample_data)} accounts...")
-
-        # Execute workflow
-        workflow_config = {
-            "enable_llm_analysis": True,
-            "parallel_execution": True,
-            "max_concurrent_agents": 2,
-            "generate_recommendations": True
-        }
-
-        result = await orchestrator.execute_compliance_workflow(
-            sample_data, workflow_config
-        )
-
-        # Display results
-        logger.info("=== COMPLIANCE ORCHESTRATION RESULTS ===")
-        logger.info(f"Total Processing Time: {result['total_processing_time']:.2f} seconds")
-        logger.info(f"Accounts Analyzed: {result['compliance_metrics']['total_accounts_analyzed']}")
-        logger.info(f"Violations Found: {result['compliance_metrics']['total_violations_found']}")
-        logger.info(f"Compliance Rate: {result['compliance_metrics']['overall_compliance_rate']:.2f}%")
-        logger.info(f"Risk Level: {result['compliance_metrics']['regulatory_risk_level']}")
-
-        # Display LLM recommendations
-        if result.get('priority_recommendations'):
-            logger.info("\n=== TOP LLM RECOMMENDATIONS ===")
-            for i, rec in enumerate(result['priority_recommendations'][:5], 1):
-                logger.info(f"{i}. [{rec.get('priority', 'MEDIUM')}] {rec.get('recommendation', 'No description')}")
-
-        # Display agent performance
-        logger.info("\n=== AGENT PERFORMANCE ===")
-        for agent_id, metrics in result['agent_results'].items():
-            logger.info(f"{agent_id}: {metrics['violations_found']} violations, {metrics['execution_time']:.2f}s")
+        # Check dormancy classification compliance
+        dormancy_status = account_data.get('dormancy_status', '')
+        last_transaction_date = account_data.get('last_transaction_date')
+        dormancy_trigger_date = account_data.get('dormancy_trigger_date')
+
+        if last_transaction_date:
+            days_inactive = (datetime.now() - datetime.fromisoformat(str(last_transaction_date))).days
+
+            # Violation: Account should be dormant but not classified
+            if days_inactive >= 365 and dormancy_status != 'dormant':
+                result['violations'].append("Account meets dormancy criteria but not classified as dormant")
+                result['compliance_status'] = ComplianceStatus.NON_COMPLIANT.value
+                result['priority'] = Priority.HIGH.value
+                result['risk_level'] = RiskLevel.HIGH.value
+
+            # Violation: Missing dormancy trigger date
+            if dormancy_status == 'dormant' and not dormancy_trigger_date:
+                result['violations'].append("Dormant account missing trigger date")
+                result['compliance_status'] = ComplianceStatus.NON_COMPLIANT.value
+                result['priority'] = Priority.MEDIUM.value
+                result['risk_level'] = RiskLevel.MEDIUM.value
+
+        if result['violations']:
+            result['action'] = "Update dormancy classification and trigger dates"
+            context = f"Article 2 violations found: {result['violations']}. Account: {account_data.get('account_id', 'unknown')}"
+            result['recommendation'] = self.get_llm_recommendation(context)
 
         return result
 
-    except Exception as e:
-        logger.error(f"Production example failed: {e}")
-        return None
 
+# Agent 2: Article 3.1 Compliance - Customer Contact Process
+class Article31ComplianceAgent(ComplianceAgent):
+    def execute(self, account_data: Dict, dormancy_results: Dict = None) -> Dict:
+        result = {
+            'agent': 'Article31Compliance',
+            'compliance_status': ComplianceStatus.COMPLIANT.value,
+            'violations': [],
+            'action': None,
+            'priority': Priority.LOW.value,
+            'risk_level': RiskLevel.LOW.value,
+            'recommendation': None,
+            'regulatory_citation': 'CBUAE Article 3.1 - Customer Contact Requirements'
+        }
+
+        customer_type = account_data.get('customer_type', 'individual')
+        account_value = account_data.get('balance_current', 0)
+        contact_attempts = account_data.get('contact_attempts_made', 0)
+        dormancy_status = account_data.get('dormancy_status', '')
+
+        if dormancy_status == 'dormant':
+            # Determine required contact attempts
+            required_attempts = 3  # Default
+            if customer_type == 'individual' and account_value >= 25000:
+                required_attempts = 5
+            elif customer_type == 'corporate':
+                required_attempts = 5 if account_value >= 100000 else 4
+
+            # Check compliance
+            if contact_attempts < required_attempts:
+                result['violations'].append(
+                    f"Insufficient contact attempts: {contact_attempts} of {required_attempts} required")
+                result['compliance_status'] = ComplianceStatus.NON_COMPLIANT.value
+                result['priority'] = Priority.HIGH.value
+                result['risk_level'] = RiskLevel.HIGH.value
+                result['action'] = f"Complete {required_attempts - contact_attempts} additional contact attempts"
+
+            # Check contact method diversity
+            last_contact_method = account_data.get('last_contact_method', '')
+            if contact_attempts > 0 and len(last_contact_method.split(',')) < 2:
+                result['violations'].append("Contact attempts must use diverse methods (email, phone, letter)")
+                result['compliance_status'] = ComplianceStatus.PARTIAL_COMPLIANT.value
+                result['priority'] = Priority.MEDIUM.value
+
+        if result['violations']:
+            context = f"Article 3.1 violations: {result['violations']}. Customer type: {customer_type}, Value: {account_value}"
+            result['recommendation'] = self.get_llm_recommendation(context)
+
+        return result
+
+
+# Agent 3: Article 3.4 Compliance - Central Bank Transfer
+class Article34ComplianceAgent(ComplianceAgent):
+    def execute(self, account_data: Dict, dormancy_results: Dict = None) -> Dict:
+        result = {
+            'agent': 'Article34Compliance',
+            'compliance_status': ComplianceStatus.COMPLIANT.value,
+            'violations': [],
+            'action': None,
+            'priority': Priority.LOW.value,
+            'risk_level': RiskLevel.LOW.value,
+            'recommendation': None,
+            'regulatory_citation': 'CBUAE Article 3.4 - Central Bank Transfer Requirements'
+        }
+
+        dormancy_trigger_date = account_data.get('dormancy_trigger_date')
+        transfer_eligibility_date = account_data.get('transfer_eligibility_date')
+        transferred_to_cb_date = account_data.get('transferred_to_cb_date')
+        contact_attempts = account_data.get('contact_attempts_made', 0)
+
+        if dormancy_trigger_date:
+            dormancy_days = (datetime.now() - datetime.fromisoformat(str(dormancy_trigger_date))).days
+
+            # Check if eligible for CB transfer (2+ years dormant + contact completed)
+            if dormancy_days >= 730 and contact_attempts >= 3:
+                if not transfer_eligibility_date:
+                    result['violations'].append("Account eligible for CB transfer but eligibility date not set")
+                    result['compliance_status'] = ComplianceStatus.NON_COMPLIANT.value
+                    result['priority'] = Priority.HIGH.value
+                    result['risk_level'] = RiskLevel.HIGH.value
+
+                elif transfer_eligibility_date and not transferred_to_cb_date:
+                    eligibility_days = (datetime.now() - datetime.fromisoformat(str(transfer_eligibility_date))).days
+                    if eligibility_days > 90:  # 3 months overdue
+                        result['violations'].append(f"CB transfer overdue by {eligibility_days - 90} days")
+                        result['compliance_status'] = ComplianceStatus.CRITICAL_VIOLATION.value
+                        result['priority'] = Priority.CRITICAL.value
+                        result['risk_level'] = RiskLevel.CRITICAL.value
+                        result['action'] = "Immediately initiate CB transfer process"
+
+        if result['violations']:
+            context = f"Article 3.4 violations: {result['violations']}. Dormancy days: {dormancy_days if 'dormancy_days' in locals() else 'unknown'}"
+            result['recommendation'] = self.get_llm_recommendation(context)
+
+        return result
+
+
+# Agent 4: Contact Verification Compliance
+class ContactVerificationAgent(ComplianceAgent):
+    def execute(self, account_data: Dict, dormancy_results: Dict = None) -> Dict:
+        result = {
+            'agent': 'ContactVerification',
+            'compliance_status': ComplianceStatus.COMPLIANT.value,
+            'violations': [],
+            'action': None,
+            'priority': Priority.LOW.value,
+            'risk_level': RiskLevel.LOW.value,
+            'recommendation': None,
+            'regulatory_citation': 'CBUAE Contact Verification Standards'
+        }
+
+        # Verify contact information completeness
+        required_fields = ['phone_primary', 'email_primary', 'address_line1']
+        missing_contact_info = []
+
+        for field in required_fields:
+            if not account_data.get(field):
+                missing_contact_info.append(field)
+
+        if missing_contact_info:
+            result['violations'].append(f"Missing required contact information: {missing_contact_info}")
+            result['compliance_status'] = ComplianceStatus.NON_COMPLIANT.value
+            result['priority'] = Priority.MEDIUM.value
+            result['risk_level'] = RiskLevel.MEDIUM.value
+
+        # Verify contact attempt documentation
+        contact_attempts = account_data.get('contact_attempts_made', 0)
+        last_contact_attempt_date = account_data.get('last_contact_attempt_date')
+
+        if contact_attempts > 0 and not last_contact_attempt_date:
+            result['violations'].append("Contact attempts recorded but missing attempt dates")
+            result['compliance_status'] = ComplianceStatus.NON_COMPLIANT.value
+            result['priority'] = Priority.MEDIUM.value
+
+        # Check address verification
+        address_known = account_data.get('address_known', True)
+        if not address_known and contact_attempts < 5:
+            result['violations'].append("Unknown address requires enhanced contact efforts")
+            result['compliance_status'] = ComplianceStatus.PARTIAL_COMPLIANT.value
+            result['priority'] = Priority.HIGH.value
+            result['action'] = "Implement address verification procedures"
+
+        if result['violations']:
+            context = f"Contact verification issues: {result['violations']}"
+            result['recommendation'] = self.get_llm_recommendation(context)
+
+        return result
+
+
+# Agent 5: Transfer Eligibility Compliance
+class TransferEligibilityComplianceAgent(ComplianceAgent):
+    def execute(self, account_data: Dict, dormancy_results: Dict = None) -> Dict:
+        result = {
+            'agent': 'TransferEligibilityCompliance',
+            'compliance_status': ComplianceStatus.COMPLIANT.value,
+            'violations': [],
+            'action': None,
+            'priority': Priority.LOW.value,
+            'risk_level': RiskLevel.LOW.value,
+            'recommendation': None,
+            'regulatory_citation': 'CBUAE Transfer Eligibility Requirements'
+        }
+
+        # Check transfer eligibility criteria
+        has_outstanding_facilities = account_data.get('has_outstanding_facilities', False)
+        cb_transfer_amount = account_data.get('cb_transfer_amount')
+        balance_current = account_data.get('balance_current', 0)
+        exclusion_reason = account_data.get('exclusion_reason')
+
+        # Accounts with outstanding facilities should be excluded
+        if has_outstanding_facilities and not exclusion_reason:
+            result['violations'].append("Account has outstanding facilities but no exclusion reason documented")
+            result['compliance_status'] = ComplianceStatus.NON_COMPLIANT.value
+            result['priority'] = Priority.HIGH.value
+            result['risk_level'] = RiskLevel.HIGH.value
+
+        # Transfer amount should match current balance (minus fees)
+        if cb_transfer_amount and balance_current:
+            if abs(cb_transfer_amount - balance_current) > (balance_current * 0.02):  # 2% tolerance
+                result['violations'].append("CB transfer amount does not match account balance")
+                result['compliance_status'] = ComplianceStatus.NON_COMPLIANT.value
+                result['priority'] = Priority.MEDIUM.value
+
+        # Check minimum transfer threshold
+        if balance_current > 0 and balance_current < 100:  # Minimum threshold 100 AED
+            if not exclusion_reason:
+                result['violations'].append("Below minimum transfer threshold but no exclusion documented")
+                result['compliance_status'] = ComplianceStatus.PARTIAL_COMPLIANT.value
+                result['priority'] = Priority.LOW.value
+
+        if result['violations']:
+            result['action'] = "Review and correct transfer eligibility documentation"
+            context = f"Transfer eligibility issues: {result['violations']}"
+            result['recommendation'] = self.get_llm_recommendation(context)
+
+        return result
+
+
+# Agent 6: FX Conversion Compliance
+class FXConversionComplianceAgent(ComplianceAgent):
+    def execute(self, account_data: Dict, dormancy_results: Dict = None) -> Dict:
+        result = {
+            'agent': 'FXConversionCompliance',
+            'compliance_status': ComplianceStatus.COMPLIANT.value,
+            'violations': [],
+            'action': None,
+            'priority': Priority.LOW.value,
+            'risk_level': RiskLevel.LOW.value,
+            'recommendation': None,
+            'regulatory_citation': 'CBUAE Foreign Exchange Conversion Standards'
+        }
+
+        currency = account_data.get('currency', 'AED')
+        balance_current = account_data.get('balance_current', 0)
+        cb_transfer_amount = account_data.get('cb_transfer_amount')
+
+        # Check FX accounts compliance
+        if currency != 'AED':
+            # FX conversion rate documentation required
+            if cb_transfer_amount and not account_data.get('fx_conversion_rate'):
+                result['violations'].append("Foreign currency account missing conversion rate documentation")
+                result['compliance_status'] = ComplianceStatus.NON_COMPLIANT.value
+                result['priority'] = Priority.MEDIUM.value
+                result['risk_level'] = RiskLevel.MEDIUM.value
+
+            # FX conversion date required
+            if cb_transfer_amount and not account_data.get('fx_conversion_date'):
+                result['violations'].append("Missing FX conversion date for foreign currency transfer")
+                result['compliance_status'] = ComplianceStatus.NON_COMPLIANT.value
+                result['priority'] = Priority.MEDIUM.value
+
+            # Check if conversion follows CBUAE rates
+            if balance_current > 0:
+                result['action'] = "Verify FX conversion uses official CBUAE rates"
+
+        if result['violations']:
+            context = f"FX conversion compliance issues: {result['violations']}. Currency: {currency}"
+            result['recommendation'] = self.get_llm_recommendation(context)
+
+        return result
+
+
+# Agent 7: Process Management Compliance
+class ProcessManagementComplianceAgent(ComplianceAgent):
+    def execute(self, account_data: Dict, dormancy_results: Dict = None) -> Dict:
+        result = {
+            'agent': 'ProcessManagementCompliance',
+            'compliance_status': ComplianceStatus.COMPLIANT.value,
+            'violations': [],
+            'action': None,
+            'priority': Priority.LOW.value,
+            'risk_level': RiskLevel.LOW.value,
+            'recommendation': None,
+            'regulatory_citation': 'CBUAE Process Management Standards'
+        }
+
+        current_stage = account_data.get('current_stage', '')
+        updated_by = account_data.get('updated_by', '')
+        updated_date = account_data.get('updated_date')
+
+        # Check process stage progression
+        valid_stages = ['initial', 'contact_phase', 'waiting_period', 'transfer_eligible', 'transferred', 'completed']
+        if current_stage and current_stage not in valid_stages:
+            result['violations'].append(f"Invalid process stage: {current_stage}")
+            result['compliance_status'] = ComplianceStatus.NON_COMPLIANT.value
+            result['priority'] = Priority.MEDIUM.value
+
+        # Check update tracking
+        if not updated_by:
+            result['violations'].append("Missing user tracking for account updates")
+            result['compliance_status'] = ComplianceStatus.PARTIAL_COMPLIANT.value
+            result['priority'] = Priority.LOW.value
+
+        if not updated_date:
+            result['violations'].append("Missing timestamp for last update")
+            result['compliance_status'] = ComplianceStatus.PARTIAL_COMPLIANT.value
+            result['priority'] = Priority.LOW.value
+
+        # Check for stale records (no updates in 90 days for active dormant accounts)
+        if updated_date and current_stage in ['contact_phase', 'waiting_period']:
+            days_since_update = (datetime.now() - datetime.fromisoformat(str(updated_date))).days
+            if days_since_update > 90:
+                result['violations'].append(f"Process stalled: No updates for {days_since_update} days")
+                result['compliance_status'] = ComplianceStatus.NON_COMPLIANT.value
+                result['priority'] = Priority.HIGH.value
+                result['risk_level'] = RiskLevel.HIGH.value
+                result['action'] = "Review and update account status"
+
+        if result['violations']:
+            context = f"Process management issues: {result['violations']}"
+            result['recommendation'] = self.get_llm_recommendation(context)
+
+        return result
+
+
+# Agent 8: Documentation Compliance
+class DocumentationComplianceAgent(ComplianceAgent):
+    def execute(self, account_data: Dict, dormancy_results: Dict = None) -> Dict:
+        result = {
+            'agent': 'DocumentationCompliance',
+            'compliance_status': ComplianceStatus.COMPLIANT.value,
+            'violations': [],
+            'action': None,
+            'priority': Priority.LOW.value,
+            'risk_level': RiskLevel.LOW.value,
+            'recommendation': None,
+            'regulatory_citation': 'CBUAE Documentation Requirements'
+        }
+
+        # Check required documentation fields
+        required_docs = {
+            'tracking_id': 'Unique tracking identifier',
+            'created_date': 'Account creation timestamp',
+            'dormancy_classification_date': 'Dormancy classification date',
+            'last_statement_date': 'Last statement generation date'
+        }
+
+        missing_docs = []
+        for field, description in required_docs.items():
+            if not account_data.get(field):
+                missing_docs.append(description)
+
+        if missing_docs:
+            result['violations'].append(f"Missing required documentation: {missing_docs}")
+            result['compliance_status'] = ComplianceStatus.NON_COMPLIANT.value
+            result['priority'] = Priority.MEDIUM.value
+            result['risk_level'] = RiskLevel.MEDIUM.value
+
+        # Check statement frequency compliance
+        statement_frequency = account_data.get('statement_frequency', '')
+        last_statement_date = account_data.get('last_statement_date')
+
+        if statement_frequency and last_statement_date:
+            freq_days = {'monthly': 30, 'quarterly': 90, 'annual': 365}.get(statement_frequency, 30)
+            days_since_statement = (datetime.now() - datetime.fromisoformat(str(last_statement_date))).days
+
+            if days_since_statement > freq_days * 1.2:  # 20% tolerance
+                result['violations'].append(f"Statement overdue by {days_since_statement - freq_days} days")
+                result['compliance_status'] = ComplianceStatus.PARTIAL_COMPLIANT.value
+                result['priority'] = Priority.LOW.value
+
+        if result['violations']:
+            result['action'] = "Complete missing documentation requirements"
+            context = f"Documentation compliance issues: {result['violations']}"
+            result['recommendation'] = self.get_llm_recommendation(context)
+
+        return result
+
+
+# Agent 9: Timeline Compliance
+class TimelineComplianceAgent(ComplianceAgent):
+    def execute(self, account_data: Dict, dormancy_results: Dict = None) -> Dict:
+        result = {
+            'agent': 'TimelineCompliance',
+            'compliance_status': ComplianceStatus.COMPLIANT.value,
+            'violations': [],
+            'action': None,
+            'priority': Priority.LOW.value,
+            'risk_level': RiskLevel.LOW.value,
+            'recommendation': None,
+            'regulatory_citation': 'CBUAE Timeline Requirements'
+        }
+
+        # Check key timeline milestones
+        dormancy_trigger_date = account_data.get('dormancy_trigger_date')
+        waiting_period_start = account_data.get('waiting_period_start')
+        waiting_period_end = account_data.get('waiting_period_end')
+        transfer_eligibility_date = account_data.get('transfer_eligibility_date')
+
+        if dormancy_trigger_date:
+            trigger_date = datetime.fromisoformat(str(dormancy_trigger_date))
+
+            # Check 3-month waiting period compliance
+            if waiting_period_start:
+                waiting_start = datetime.fromisoformat(str(waiting_period_start))
+                if (waiting_start - trigger_date).days > 30:  # Should start within 30 days
+                    result['violations'].append("Waiting period started too late after dormancy trigger")
+                    result['compliance_status'] = ComplianceStatus.NON_COMPLIANT.value
+                    result['priority'] = Priority.MEDIUM.value
+
+            # Check waiting period duration
+            if waiting_period_start and waiting_period_end:
+                waiting_duration = (datetime.fromisoformat(str(waiting_period_end)) -
+                                    datetime.fromisoformat(str(waiting_period_start))).days
+                if waiting_duration < 90:
+                    result['violations'].append(f"Waiting period too short: {waiting_duration} days (minimum 90)")
+                    result['compliance_status'] = ComplianceStatus.CRITICAL_VIOLATION.value
+                    result['priority'] = Priority.CRITICAL.value
+                    result['risk_level'] = RiskLevel.CRITICAL.value
+
+            # Check transfer eligibility timing
+            if transfer_eligibility_date:
+                eligibility_date = datetime.fromisoformat(str(transfer_eligibility_date))
+                dormancy_duration = (eligibility_date - trigger_date).days
+                if dormancy_duration < 730:  # Minimum 2 years
+                    result['violations'].append(f"Transfer eligibility set too early: {dormancy_duration} days")
+                    result['compliance_status'] = ComplianceStatus.CRITICAL_VIOLATION.value
+                    result['priority'] = Priority.CRITICAL.value
+                    result['risk_level'] = RiskLevel.CRITICAL.value
+
+        if result['violations']:
+            result['action'] = "Correct timeline violations and update process dates"
+            context = f"Timeline compliance violations: {result['violations']}"
+            result['recommendation'] = self.get_llm_recommendation(context)
+
+        return result
+
+
+# Agent 10: Amount Verification Compliance
+class AmountVerificationComplianceAgent(ComplianceAgent):
+    def execute(self, account_data: Dict, dormancy_results: Dict = None) -> Dict:
+        result = {
+            'agent': 'AmountVerificationCompliance',
+            'compliance_status': ComplianceStatus.COMPLIANT.value,
+            'violations': [],
+            'action': None,
+            'priority': Priority.LOW.value,
+            'risk_level': RiskLevel.LOW.value,
+            'recommendation': None,
+            'regulatory_citation': 'CBUAE Amount Verification Standards'
+        }
+
+        balance_current = account_data.get('balance_current', 0)
+        balance_available = account_data.get('balance_available', 0)
+        balance_minimum = account_data.get('balance_minimum', 0)
+        interest_accrued = account_data.get('interest_accrued', 0)
+
+        # Verify balance consistency
+        if balance_available > balance_current:
+            result['violations'].append("Available balance exceeds current balance")
+            result['compliance_status'] = ComplianceStatus.NON_COMPLIANT.value
+            result['priority'] = Priority.HIGH.value
+            result['risk_level'] = RiskLevel.HIGH.value
+
+        # Check minimum balance compliance
+        if balance_minimum > 0 and balance_current < balance_minimum:
+            result['violations'].append(
+                f"Current balance below minimum requirement: {balance_current} < {balance_minimum}")
+            result['compliance_status'] = ComplianceStatus.PARTIAL_COMPLIANT.value
+            result['priority'] = Priority.MEDIUM.value
+
+        # Verify interest calculation
+        interest_rate = account_data.get('interest_rate', 0)
+        if interest_rate > 0 and balance_current > 0 and interest_accrued == 0:
+            result['violations'].append("Interest-bearing account with zero accrued interest")
+            result['compliance_status'] = ComplianceStatus.NON_COMPLIANT.value
+            result['priority'] = Priority.MEDIUM.value
+
+        # Check for negative balances
+        if balance_current < 0:
+            result['violations'].append("Account has negative balance")
+            result['compliance_status'] = ComplianceStatus.CRITICAL_VIOLATION.value
+            result['priority'] = Priority.CRITICAL.value
+            result['risk_level'] = RiskLevel.CRITICAL.value
+
+        if result['violations']:
+            result['action'] = "Investigate and correct balance discrepancies"
+            context = f"Amount verification issues: {result['violations']}"
+            result['recommendation'] = self.get_llm_recommendation(context)
+
+        return result
+
+
+# Agent 11: Claims Detection Compliance
+class ClaimsDetectionComplianceAgent(ComplianceAgent):
+    def execute(self, account_data: Dict, dormancy_results: Dict = None) -> Dict:
+        result = {
+            'agent': 'ClaimsDetectionCompliance',
+            'compliance_status': ComplianceStatus.COMPLIANT.value,
+            'violations': [],
+            'action': None,
+            'priority': Priority.LOW.value,
+            'risk_level': RiskLevel.LOW.value,
+            'recommendation': None,
+            'regulatory_citation': 'CBUAE Claims Detection Requirements'
+        }
+
+        has_outstanding_facilities = account_data.get('has_outstanding_facilities', False)
+        is_joint_account = account_data.get('is_joint_account', False)
+        joint_account_holders = account_data.get('joint_account_holders', '')
+        exclusion_reason = account_data.get('exclusion_reason', '')
+
+        # Check for outstanding facilities documentation
+        if has_outstanding_facilities:
+            if not exclusion_reason:
+                result['violations'].append("Outstanding facilities detected but no exclusion reason provided")
+                result['compliance_status'] = ComplianceStatus.NON_COMPLIANT.value
+                result['priority'] = Priority.HIGH.value
+                result['risk_level'] = RiskLevel.HIGH.value
+
+        # Check joint account holder verification
+        if is_joint_account:
+            if not joint_account_holders:
+                result['violations'].append("Joint account missing holder information")
+                result['compliance_status'] = ComplianceStatus.NON_COMPLIANT.value
+                result['priority'] = Priority.MEDIUM.value
+
+            # Joint accounts require verification of all holders
+            if joint_account_holders and len(joint_account_holders.split(',')) < 2:
+                result['violations'].append("Joint account must have multiple verified holders")
+                result['compliance_status'] = ComplianceStatus.PARTIAL_COMPLIANT.value
+                result['priority'] = Priority.MEDIUM.value
+
+        # Check for legal claims indicators
+        legal_indicators = ['litigation', 'garnishment', 'lien', 'court_order']
+        for indicator in legal_indicators:
+            if account_data.get(indicator, False):
+                if not exclusion_reason or indicator not in exclusion_reason.lower():
+                    result['violations'].append(
+                        f"Legal claim indicator ({indicator}) not documented in exclusion reason")
+                    result['compliance_status'] = ComplianceStatus.NON_COMPLIANT.value
+                    result['priority'] = Priority.HIGH.value
+                    result['risk_level'] = RiskLevel.HIGH.value
+
+        if result['violations']:
+            result['action'] = "Document and verify all outstanding claims"
+            context = f"Claims detection issues: {result['violations']}"
+            result['recommendation'] = self.get_llm_recommendation(context)
+
+        return result
+
+
+# Agent 12: Flag Instructions Compliance
+class FlagInstructionsComplianceAgent(ComplianceAgent):
+    def execute(self, account_data: Dict, dormancy_results: Dict = None) -> Dict:
+        result = {
+            'agent': 'FlagInstructionsCompliance',
+            'compliance_status': ComplianceStatus.COMPLIANT.value,
+            'violations': [],
+            'action': None,
+            'priority': Priority.LOW.value,
+            'risk_level': RiskLevel.LOW.value,
+            'recommendation': None,
+            'regulatory_citation': 'CBUAE Flag Instructions Standards'
+        }
+
+        # Check for special handling flags
+        special_flags = {
+            'vip_customer': 'VIP customer requiring special handling',
+            'regulatory_watch': 'Account under regulatory monitoring',
+            'legal_hold': 'Account subject to legal proceedings',
+            'deceased_customer': 'Deceased customer account',
+            'dispute_pending': 'Customer dispute in progress'
+        }
+
+        active_flags = []
+        for flag, description in special_flags.items():
+            if account_data.get(flag, False):
+                active_flags.append(flag)
+
+        # Verify flag documentation
+        if active_flags:
+            flag_instructions = account_data.get('flag_instructions', '')
+            if not flag_instructions:
+                result['violations'].append(f"Active flags ({active_flags}) missing handling instructions")
+                result['compliance_status'] = ComplianceStatus.NON_COMPLIANT.value
+                result['priority'] = Priority.HIGH.value
+                result['risk_level'] = RiskLevel.HIGH.value
+
+        # Check deceased customer handling
+        if account_data.get('deceased_customer', False):
+            if not account_data.get('death_certificate_received', False):
+                result['violations'].append("Deceased customer flag without death certificate verification")
+                result['compliance_status'] = ComplianceStatus.CRITICAL_VIOLATION.value
+                result['priority'] = Priority.CRITICAL.value
+                result['risk_level'] = RiskLevel.CRITICAL.value
+
+        # Check regulatory compliance for flagged accounts
+        if account_data.get('regulatory_watch', False):
+            if not account_data.get('compliance_officer_assigned', False):
+                result['violations'].append("Regulatory watch account missing compliance officer assignment")
+                result['compliance_status'] = ComplianceStatus.NON_COMPLIANT.value
+                result['priority'] = Priority.HIGH.value
+
+        if result['violations']:
+            result['action'] = "Update flag instructions and verify special handling procedures"
+            context = f"Flag instructions violations: {result['violations']}"
+            result['recommendation'] = self.get_llm_recommendation(context)
+
+        return result
+
+
+# Agent 13: Risk Assessment Compliance
+class RiskAssessmentComplianceAgent(ComplianceAgent):
+    def execute(self, account_data: Dict, dormancy_results: Dict = None) -> Dict:
+        result = {
+            'agent': 'RiskAssessmentCompliance',
+            'compliance_status': ComplianceStatus.COMPLIANT.value,
+            'violations': [],
+            'action': None,
+            'priority': Priority.LOW.value,
+            'risk_level': RiskLevel.LOW.value,
+            'recommendation': None,
+            'regulatory_citation': 'CBUAE Risk Assessment Requirements'
+        }
+
+        risk_rating = account_data.get('risk_rating', '')
+        balance_current = account_data.get('balance_current', 0)
+        nationality = account_data.get('nationality', '')
+        kyc_status = account_data.get('kyc_status', '')
+        kyc_expiry_date = account_data.get('kyc_expiry_date')
+
+        # Check risk rating assignment
+        if not risk_rating:
+            result['violations'].append("Missing risk rating assignment")
+            result['compliance_status'] = ComplianceStatus.NON_COMPLIANT.value
+            result['priority'] = Priority.HIGH.value
+            result['risk_level'] = RiskLevel.HIGH.value
+
+        # Verify high-value account risk assessment
+        if balance_current >= 100000 and risk_rating not in ['high', 'very_high']:
+            result['violations'].append("High-value account with inadequate risk rating")
+            result['compliance_status'] = ComplianceStatus.NON_COMPLIANT.value
+            result['priority'] = Priority.HIGH.value
+            result['risk_level'] = RiskLevel.HIGH.value
+
+        # Check KYC compliance
+        if kyc_status != 'compliant':
+            result['violations'].append(f"Non-compliant KYC status: {kyc_status}")
+            result['compliance_status'] = ComplianceStatus.NON_COMPLIANT.value
+            result['priority'] = Priority.HIGH.value
+            result['risk_level'] = RiskLevel.HIGH.value
+
+        # Check KYC expiry
+        if kyc_expiry_date:
+            if datetime.fromisoformat(str(kyc_expiry_date)) < datetime.now():
+                result['violations'].append("Expired KYC documentation")
+                result['compliance_status'] = ComplianceStatus.CRITICAL_VIOLATION.value
+                result['priority'] = Priority.CRITICAL.value
+                result['risk_level'] = RiskLevel.CRITICAL.value
+
+        # Check nationality-based risk factors
+        high_risk_countries = ['XX', 'YY', 'ZZ']  # Placeholder for actual high-risk countries
+        if nationality in high_risk_countries and risk_rating != 'high':
+            result['violations'].append("High-risk nationality with inadequate risk rating")
+            result['compliance_status'] = ComplianceStatus.NON_COMPLIANT.value
+            result['priority'] = Priority.HIGH.value
+
+        if result['violations']:
+            result['action'] = "Update risk assessment and KYC documentation"
+            context = f"Risk assessment violations: {result['violations']}"
+            result['recommendation'] = self.get_llm_recommendation(context)
+
+        return result
+
+
+# Agent 14: Regulatory Reporting Compliance
+class RegulatoryReportingComplianceAgent(ComplianceAgent):
+    def execute(self, account_data: Dict, dormancy_results: Dict = None) -> Dict:
+        result = {
+            'agent': 'RegulatoryReportingCompliance',
+            'compliance_status': ComplianceStatus.COMPLIANT.value,
+            'violations': [],
+            'action': None,
+            'priority': Priority.LOW.value,
+            'risk_level': RiskLevel.LOW.value,
+            'recommendation': None,
+            'regulatory_citation': 'CBUAE Regulatory Reporting Requirements'
+        }
+
+        # Check reporting data completeness
+        required_reporting_fields = [
+            'customer_id', 'account_id', 'balance_current', 'dormancy_status',
+            'last_transaction_date', 'customer_type', 'nationality'
+        ]
+
+        missing_fields = []
+        for field in required_reporting_fields:
+            if not account_data.get(field):
+                missing_fields.append(field)
+
+        if missing_fields:
+            result['violations'].append(f"Missing required reporting fields: {missing_fields}")
+            result['compliance_status'] = ComplianceStatus.NON_COMPLIANT.value
+            result['priority'] = Priority.MEDIUM.value
+            result['risk_level'] = RiskLevel.MEDIUM.value
+
+        # Check data quality for reporting
+        customer_id = account_data.get('customer_id', '')
+        account_id = account_data.get('account_id', '')
+
+        if customer_id and len(customer_id) < 5:
+            result['violations'].append("Customer ID format invalid for regulatory reporting")
+            result['compliance_status'] = ComplianceStatus.NON_COMPLIANT.value
+            result['priority'] = Priority.MEDIUM.value
+
+        if account_id and len(account_id) < 8:
+            result['violations'].append("Account ID format invalid for regulatory reporting")
+            result['compliance_status'] = ComplianceStatus.NON_COMPLIANT.value
+            result['priority'] = Priority.MEDIUM.value
+
+        # Check reportable threshold compliance
+        balance_current = account_data.get('balance_current', 0)
+        if balance_current >= 3000:  # CBUAE reporting threshold
+            if not account_data.get('reportable_to_cbuae', True):
+                result['violations'].append("Account above reporting threshold but marked as non-reportable")
+                result['compliance_status'] = ComplianceStatus.CRITICAL_VIOLATION.value
+                result['priority'] = Priority.CRITICAL.value
+                result['risk_level'] = RiskLevel.CRITICAL.value
+
+        if result['violations']:
+            result['action'] = "Correct data quality issues for regulatory reporting"
+            context = f"Regulatory reporting violations: {result['violations']}"
+            result['recommendation'] = self.get_llm_recommendation(context)
+
+        return result
+
+
+# Agent 15: Audit Trail Compliance
+class AuditTrailComplianceAgent(ComplianceAgent):
+    def execute(self, account_data: Dict, dormancy_results: Dict = None) -> Dict:
+        result = {
+            'agent': 'AuditTrailCompliance',
+            'compliance_status': ComplianceStatus.COMPLIANT.value,
+            'violations': [],
+            'action': None,
+            'priority': Priority.LOW.value,
+            'risk_level': RiskLevel.LOW.value,
+            'recommendation': None,
+            'regulatory_citation': 'CBUAE Audit Trail Requirements'
+        }
+
+        # Check audit trail completeness
+        audit_fields = ['created_date', 'updated_date', 'updated_by']
+        missing_audit_fields = []
+
+        for field in audit_fields:
+            if not account_data.get(field):
+                missing_audit_fields.append(field)
+
+        if missing_audit_fields:
+            result['violations'].append(f"Missing audit trail fields: {missing_audit_fields}")
+            result['compliance_status'] = ComplianceStatus.NON_COMPLIANT.value
+            result['priority'] = Priority.MEDIUM.value
+
+        # Check change tracking
+        if account_data.get('dormancy_status') == 'dormant':
+            if not account_data.get('dormancy_classification_date'):
+                result['violations'].append("Dormancy status change not properly tracked")
+                result['compliance_status'] = ComplianceStatus.NON_COMPLIANT.value
+                result['priority'] = Priority.HIGH.value
+                result['risk_level'] = RiskLevel.HIGH.value
+
+        # Check user authorization tracking
+        updated_by = account_data.get('updated_by', '')
+        if updated_by and not updated_by.startswith(('USER_', 'SYS_', 'ADMIN_')):
+            result['violations'].append("Invalid user identifier format in audit trail")
+            result['compliance_status'] = ComplianceStatus.PARTIAL_COMPLIANT.value
+            result['priority'] = Priority.LOW.value
+
+        # Check timestamp consistency
+        created_date = account_data.get('created_date')
+        updated_date = account_data.get('updated_date')
+
+        if created_date and updated_date:
+            if datetime.fromisoformat(str(updated_date)) < datetime.fromisoformat(str(created_date)):
+                result['violations'].append("Update timestamp earlier than creation timestamp")
+                result['compliance_status'] = ComplianceStatus.NON_COMPLIANT.value
+                result['priority'] = Priority.MEDIUM.value
+
+        if result['violations']:
+            result['action'] = "Implement proper audit trail logging"
+            context = f"Audit trail violations: {result['violations']}"
+            result['recommendation'] = self.get_llm_recommendation(context)
+
+        return result
+
+
+# Agent 16: Action Generation Compliance
+class ActionGenerationComplianceAgent(ComplianceAgent):
+    def execute(self, account_data: Dict, dormancy_results: Dict = None) -> Dict:
+        result = {
+            'agent': 'ActionGenerationCompliance',
+            'compliance_status': ComplianceStatus.COMPLIANT.value,
+            'violations': [],
+            'action': None,
+            'priority': Priority.LOW.value,
+            'risk_level': RiskLevel.LOW.value,
+            'recommendation': None,
+            'regulatory_citation': 'CBUAE Action Generation Standards'
+        }
+
+        current_stage = account_data.get('current_stage', '')
+        dormancy_status = account_data.get('dormancy_status', '')
+        contact_attempts = account_data.get('contact_attempts_made', 0)
+
+        # Generate required actions based on current state
+        required_actions = []
+
+        if dormancy_status == 'dormant':
+            if contact_attempts < 3:
+                required_actions.append("CONTACT_CUSTOMER")
+
+            if current_stage == 'contact_phase' and contact_attempts >= 3:
+                required_actions.append("START_WAITING_PERIOD")
+
+            dormancy_trigger_date = account_data.get('dormancy_trigger_date')
+            if dormancy_trigger_date:
+                dormancy_days = (datetime.now() - datetime.fromisoformat(str(dormancy_trigger_date))).days
+                if dormancy_days >= 730 and contact_attempts >= 3:
+                    required_actions.append("INITIATE_CB_TRANSFER")
+
+        # Check if required actions are documented
+        documented_actions = account_data.get('required_actions', '').split(',')
+        documented_actions = [action.strip() for action in documented_actions if action.strip()]
+
+        missing_actions = [action for action in required_actions if action not in documented_actions]
+
+        if missing_actions:
+            result['violations'].append(f"Missing required actions: {missing_actions}")
+            result['compliance_status'] = ComplianceStatus.NON_COMPLIANT.value
+            result['priority'] = Priority.HIGH.value
+            result['risk_level'] = RiskLevel.HIGH.value
+            result['action'] = f"Document required actions: {missing_actions}"
+
+        # Check for contradictory actions
+        if 'INITIATE_CB_TRANSFER' in documented_actions and contact_attempts < 3:
+            result['violations'].append("CB transfer action without completing required contact attempts")
+            result['compliance_status'] = ComplianceStatus.CRITICAL_VIOLATION.value
+            result['priority'] = Priority.CRITICAL.value
+            result['risk_level'] = RiskLevel.CRITICAL.value
+
+        if result['violations']:
+            context = f"Action generation violations: {result['violations']}"
+            result['recommendation'] = self.get_llm_recommendation(context)
+
+        return result
+
+
+# Agent 17: Final Verification Compliance
+class FinalVerificationComplianceAgent(ComplianceAgent):
+    def execute(self, account_data: Dict, dormancy_results: Dict = None) -> Dict:
+        result = {
+            'agent': 'FinalVerificationCompliance',
+            'compliance_status': ComplianceStatus.COMPLIANT.value,
+            'violations': [],
+            'action': None,
+            'priority': Priority.LOW.value,
+            'risk_level': RiskLevel.LOW.value,
+            'recommendation': None,
+            'regulatory_citation': 'CBUAE Final Verification Standards',
+            'overall_compliance_score': 0
+        }
+
+        # Compile all violations from dormancy results if available
+        all_violations = []
+        compliance_scores = []
+
+        if dormancy_results:
+            for agent_name, agent_result in dormancy_results.items():
+                if isinstance(agent_result, dict) and 'violations' in agent_result:
+                    all_violations.extend(agent_result.get('violations', []))
+
+                # Calculate compliance score
+                violations_count = len(agent_result.get('violations', []))
+                if violations_count == 0:
+                    compliance_scores.append(100)
+                elif violations_count <= 2:
+                    compliance_scores.append(80)
+                elif violations_count <= 5:
+                    compliance_scores.append(60)
+                else:
+                    compliance_scores.append(40)
+
+        # Calculate overall compliance score
+        if compliance_scores:
+            result['overall_compliance_score'] = sum(compliance_scores) / len(compliance_scores)
+        else:
+            result['overall_compliance_score'] = 100
+
+        # Final verification checks
+        critical_fields = [
+            'customer_id', 'account_id', 'account_type', 'balance_current',
+            'dormancy_status', 'last_transaction_date'
+        ]
+
+        critical_missing = []
+        for field in critical_fields:
+            if not account_data.get(field):
+                critical_missing.append(field)
+
+        if critical_missing:
+            result['violations'].append(f"Critical fields missing: {critical_missing}")
+            result['compliance_status'] = ComplianceStatus.CRITICAL_VIOLATION.value
+            result['priority'] = Priority.CRITICAL.value
+            result['risk_level'] = RiskLevel.CRITICAL.value
+
+        # Overall compliance assessment
+        if result['overall_compliance_score'] >= 95:
+            result['compliance_status'] = ComplianceStatus.COMPLIANT.value
+        elif result['overall_compliance_score'] >= 80:
+            result['compliance_status'] = ComplianceStatus.PARTIAL_COMPLIANT.value
+            result['priority'] = Priority.MEDIUM.value
+        elif result['overall_compliance_score'] >= 60:
+            result['compliance_status'] = ComplianceStatus.NON_COMPLIANT.value
+            result['priority'] = Priority.HIGH.value
+            result['risk_level'] = RiskLevel.HIGH.value
+        else:
+            result['compliance_status'] = ComplianceStatus.CRITICAL_VIOLATION.value
+            result['priority'] = Priority.CRITICAL.value
+            result['risk_level'] = RiskLevel.CRITICAL.value
+
+        # Final action determination
+        if result['overall_compliance_score'] < 100:
+            result['action'] = "Address all compliance violations before proceeding"
+
+        if result['violations'] or all_violations:
+            context = f"Final verification found {len(all_violations)} total violations. Overall score: {result['overall_compliance_score']:.1f}%"
+            result['recommendation'] = self.get_llm_recommendation(context)
+
+        return result
+
+
+# Compliance Orchestrator
+class ComplianceOrchestrator:
+    def __init__(self):
+        self.agents = {
+            'article_2_compliance': Article2ComplianceAgent(),
+            'article_3_1_compliance': Article31ComplianceAgent(),
+            'article_3_4_compliance': Article34ComplianceAgent(),
+            'contact_verification': ContactVerificationAgent(),
+            'transfer_eligibility_compliance': TransferEligibilityComplianceAgent(),
+            'fx_conversion_compliance': FXConversionComplianceAgent(),
+            'process_management_compliance': ProcessManagementComplianceAgent(),
+            'documentation_compliance': DocumentationComplianceAgent(),
+            'timeline_compliance': TimelineComplianceAgent(),
+            'amount_verification_compliance': AmountVerificationComplianceAgent(),
+            'claims_detection_compliance': ClaimsDetectionComplianceAgent(),
+            'flag_instructions_compliance': FlagInstructionsComplianceAgent(),
+            'risk_assessment_compliance': RiskAssessmentComplianceAgent(),
+            'regulatory_reporting_compliance': RegulatoryReportingComplianceAgent(),
+            'audit_trail_compliance': AuditTrailComplianceAgent(),
+            'action_generation_compliance': ActionGenerationComplianceAgent(),
+            'final_verification_compliance': FinalVerificationComplianceAgent()
+        }
+
+    def process_account(self, account_data: Dict, dormancy_results: Dict = None) -> Dict:
+        """Process account through all compliance agents"""
+        results = {}
+
+        # Run all compliance agents
+        for agent_name, agent in self.agents.items():
+            try:
+                results[agent_name] = agent.execute(account_data, dormancy_results)
+            except Exception as e:
+                results[agent_name] = {
+                    'agent': agent_name,
+                    'error': str(e),
+                    'compliance_status': ComplianceStatus.PENDING_REVIEW.value
+                }
+
+        return results
+
+    def export_to_csv(self, account_data: Dict, results: Dict[str, Dict],
+                      filename: str = "compliance_results.csv") -> None:
+        """Export compliance results to CSV"""
+        rows = []
+
+        # Add account metadata to every agent's result
+        for agent_name, agent_result in results.items():
+            row = {
+                "account_id": account_data.get("account_id", "N/A"),
+                "customer_id": account_data.get("customer_id", "N/A"),
+                "account_type": account_data.get("account_type", "N/A"),
+                "balance_current": account_data.get("balance_current", "N/A"),
+                "dormancy_status": account_data.get("dormancy_status", "N/A"),
+                "agent": agent_name,
+            }
+            row.update(agent_result)
+            rows.append(row)
+
+        # Write to CSV
+        with open(filename, mode='w', newline='', encoding='utf-8') as file:
+            if rows:
+                writer = csv.DictWriter(file, fieldnames=rows[0].keys())
+                writer.writeheader()
+                writer.writerows(rows)
+
+        print(f"Compliance results exported to {filename}")
+
+    def generate_compliance_summary(self, results: Dict[str, Dict]) -> Dict:
+        """Generate overall compliance summary"""
+        summary = {
+            'total_agents': len(results),
+            'compliant_agents': 0,
+            'non_compliant_agents': 0,
+            'critical_violations': 0,
+            'total_violations': 0,
+            'overall_status': ComplianceStatus.COMPLIANT.value,
+            'critical_actions': [],
+            'recommendations': []
+        }
+
+        for agent_name, agent_result in results.items():
+            if agent_result.get('compliance_status') == ComplianceStatus.COMPLIANT.value:
+                summary['compliant_agents'] += 1
+            else:
+                summary['non_compliant_agents'] += 1
+
+            if agent_result.get('compliance_status') == ComplianceStatus.CRITICAL_VIOLATION.value:
+                summary['critical_violations'] += 1
+
+            violations = agent_result.get('violations', [])
+            summary['total_violations'] += len(violations)
+
+            if agent_result.get('priority') == Priority.CRITICAL.value:
+                summary['critical_actions'].append(agent_result.get('action', ''))
+
+            if agent_result.get('recommendation'):
+                summary['recommendations'].append(f"{agent_name}: {agent_result['recommendation']}")
+
+        # Determine overall status
+        if summary['critical_violations'] > 0:
+            summary['overall_status'] = ComplianceStatus.CRITICAL_VIOLATION.value
+        elif summary['non_compliant_agents'] > summary['compliant_agents']:
+            summary['overall_status'] = ComplianceStatus.NON_COMPLIANT.value
+        elif summary['non_compliant_agents'] > 0:
+            summary['overall_status'] = ComplianceStatus.PARTIAL_COMPLIANT.value
+
+        return summary
+
+
+# Example Usage
 if __name__ == "__main__":
-    # Run the production example
-    result = asyncio.run(main())
+    # Sample account data
+    sample_account = {
+        'customer_id': 'CUST12345',
+        'account_id': 'ACC98765',
+        'account_type': 'savings',
+        'balance_current': 15000,
+        'dormancy_status': 'dormant',
+        'last_transaction_date': '2022-01-15',
+        'dormancy_trigger_date': '2022-02-15',
+        'contact_attempts_made': 2,
+        'customer_type': 'individual',
+        'currency': 'AED',
+        'created_date': '2020-01-01',
+        'updated_date': '2024-01-01',
+        'updated_by': 'USER_001'
+    }
 
-    if result:
-        print("\n🎉 LLM-Enhanced Compliance Orchestration completed successfully!")
-        print(f"📊 Overall Compliance Rate: {result['compliance_metrics']['overall_compliance_rate']:.2f}%")
-        print(f"🤖 LLM Recommendations Generated: {len(result.get('priority_recommendations', []))}")
-        print(f"⚡ Processing Speed: {result['performance_metrics']['accounts_per_second']:.1f} accounts/second")
-    else:
-        print("❌ Compliance orchestration failed")
+    # Create orchestrator and process account
+    orchestrator = ComplianceOrchestrator()
+    compliance_results = orchestrator.process_account(sample_account)
+
+    # Generate summary
+    summary = orchestrator.generate_compliance_summary(compliance_results)
+
+    # Export results
+    orchestrator.export_to_csv(sample_account, compliance_results, "compliance_check_results.csv")
+
+    # Print results
+    print("COMPLIANCE ANALYSIS RESULTS:")
+    print("=" * 50)
+
+    for agent_name, result in compliance_results.items():
+        print(f"\n{agent_name.upper().replace('_', ' ')}:")
+        print(f"Status: {result.get('compliance_status', 'Unknown')}")
+        print(f"Priority: {result.get('priority', 'None')}")
+        if result.get('violations'):
+            print(f"Violations: {result['violations']}")
+        if result.get('action'):
+            print(f"Action: {result['action']}")
+
+    print(f"\nOVERALL COMPLIANCE SUMMARY:")
+    print(f"Status: {summary['overall_status']}")
+    print(f"Compliant Agents: {summary['compliant_agents']}/{summary['total_agents']}")
+    print(f"Total Violations: {summary['total_violations']}")
+    print(f"Critical Violations: {summary['critical_violations']}")
