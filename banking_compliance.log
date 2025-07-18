@@ -22,3 +22,9 @@ Traceback (most recent call last):
   File "C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\signal.py", line 58, in signal
     handler = _signal.signal(_enum_to_int(signalnum), _enum_to_int(handler))
 ValueError: signal only works in main thread of the main interpreter
+2025-07-17 17:49:38,946 - agents.Data_Process - INFO - {"event": "BGE dependencies loaded successfully", "logger": "agents.Data_Process", "level": "info", "timestamp": "2025-07-17T12:19:38.946976Z"}
+2025-07-17 17:49:39,447 - faiss.loader - INFO - Loading faiss with AVX2 support.
+2025-07-17 17:49:39,448 - faiss.loader - INFO - Could not load library with AVX2 support due to:
+ModuleNotFoundError("No module named 'faiss.swigfaiss_avx2'")
+2025-07-17 17:49:39,448 - faiss.loader - INFO - Loading faiss.
+2025-07-17 17:49:39,478 - faiss.loader - INFO - Successfully loaded faiss.

@@ -30,7 +30,7 @@ from contextlib import asynccontextmanager
 
 # Import the unified schema system
 from agents.unified_schema import (
-    UnifiedBankingSchemaManager,
+    CompleteBankingSchemaManager,
     FieldType,
     DatabaseType,
     UnifiedFieldDefinition
@@ -204,12 +204,12 @@ class ProductionDataProcessingAgent:
     """
 
     def __init__(self,
-                 schema_manager: Optional[UnifiedBankingSchemaManager] = None,
+                 schema_manager: Optional[CompleteBankingSchemaManager] = None,
                  config: Optional[Dict[str, Any]] = None):
         """Initialize the production data processing agent"""
 
         self.config = config or self._get_default_config()
-        self.schema_manager = schema_manager or UnifiedBankingSchemaManager()
+        self.schema_manager = schema_manager or CompleteBankingSchemaManager()
 
         # Initialize BGE model if available and enabled
         self.bge_model = None
@@ -1334,7 +1334,7 @@ def create_production_data_processing_agent(
     """Factory function to create production data processing agent"""
 
     # Initialize schema manager
-    schema_manager = UnifiedBankingSchemaManager(schema_config_path)
+    schema_manager = CompleteBankingSchemaManager(schema_config_path)
 
     # Create agent
     agent = ProductionDataProcessingAgent(
